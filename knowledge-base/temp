@@ -1,0 +1,36 @@
+{
+    "image": "sa_10415.jpg",
+    "question": "What is the color of the fire hydrant?", 
+    "options": 
+    [
+        "The color of the fire hydrant is yellow.", 
+        "The color of the fire hydrant is red.", 
+        "The color of the fire hydrant is black.", 
+        "The color of the fire hydrant is white."
+    ], 
+    "ground_truth": "The color of the fire hydrant is yellow.", 
+    "predicted_answer": "A. The color of the fire hydrant is yellow.", 
+    "accuracy": 1.0, 
+    "tool_calls": 
+    [
+        {
+            "tool_name": "crop", 
+            "arguments": {"bbox_2d": [157, 804, 225, 884]}, 
+            "output": "[Cropped region (157,804)-(225,884), size 68��80]", 
+            "bbox": [157, 804, 225, 884]
+        }, 
+        {
+            "tool_name": "zoom", 
+            "arguments": {"bbox_2d": [175, 816, 215, 875]}, 
+            "output": "[Zoomed into (175,816)-(215,875)]", 
+            "bbox": [175, 816, 215, 875]
+        }, 
+        {
+            "tool_name": "select", 
+            "arguments": {"label": "a fire hydrant on the sidewalk"}, 
+            "output": "[Selected: a fire hydrant on the sidewalk]"
+        }
+    ], 
+    "image_size": [2250, 1500], 
+    "status": "success"
+}

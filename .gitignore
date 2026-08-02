@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Experiments outputs (configs tracked, results not)
+experiments/results/*
+!experiments/results/.gitkeep
+
+# Logs
+log/*
+!log/.gitkeep
+
+# Checkpoints
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# Data
+data/
+*.parquet
+*.npy
+
+# Caches
+.cache/
+
+# Large PDFs (track references, not raw papers if too big)
+# knowledge-base/*.pdf is tracked (small reference set)
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,27 @@
+# Ablation: No format gate, no asymmetric fusion
+# R = acc + λ·U − γ·C + η·S  (original additive, now with question-aware utility)
+name: atr_additive
+reward: adaptive_tool
+
+model: Qwen2.5-VL-7B-Instruct
+lora_rank: 16
+rl_steps: 200
+batch_size: 128
+learning_rate: 1e-6
+
+datasets:
+  - VStar: 191
+  - HRBench-4K: 2000
+  - VSI-Bench: 3000
+
+lambda_u: 1.0
+gamma_c: 0.5
+eta_s: 0.3
+
+# CodeV-inspired enabled
+enable_question_aware_utility: true
+enable_lazy_crop_penalty: true
+
+# AdaReasoner-inspired DISABLED
+enable_format_gate: false
+enable_asymmetric_fusion: false

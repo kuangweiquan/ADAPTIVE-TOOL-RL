@@ -1,0 +1,22 @@
+# Ablation: Utility + Cost, no Sequence
+# R = acc + λ·U − γ·C
+name: atr_no_sequence
+reward: adaptive_tool
+
+model: Qwen2.5-VL-7B-Instruct
+lora_rank: 16
+rl_steps: 200
+batch_size: 128
+learning_rate: 1e-6
+
+datasets:
+  - VStar: 191
+  - HRBench-4K: 2000
+  - VSI-Bench: 3000
+
+lambda_u: 1.0
+gamma_c: 0.5
+eta_s: 0.0
+enable_utility: true
+enable_cost: true
+enable_sequence: false

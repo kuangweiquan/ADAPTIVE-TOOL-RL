@@ -1,0 +1,20 @@
+# Baseline: Original PyVision-RL reward
+# R = acc + 0.1 × n_tool_calls
+name: baseline
+reward: original_pyvision
+
+# Training
+model: Qwen2.5-VL-7B-Instruct
+lora_rank: 16
+rl_steps: 200
+batch_size: 128
+learning_rate: 1e-6
+
+# Data
+datasets:
+  - VStar: 191
+  - HRBench-4K: 2000
+  - VSI-Bench: 3000
+
+# Original reward params
+tool_reward_weight: 0.1

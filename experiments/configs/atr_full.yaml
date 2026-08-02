@@ -1,0 +1,33 @@
+# Full ATR: Adaptive Tool Reward
+# R = (R_format) · [acc + λ·U − γ·C + η·S]
+name: atr_full
+reward: adaptive_tool
+
+# Training (same as baseline)
+model: Qwen2.5-VL-7B-Instruct
+lora_rank: 16
+rl_steps: 200
+batch_size: 128
+learning_rate: 1e-6
+
+# Data
+datasets:
+  - VStar: 191
+  - HRBench-4K: 2000
+  - VSI-Bench: 3000
+
+# ATR params
+lambda_u: 1.0
+gamma_c: 0.5
+eta_s: 0.3
+
+# CodeV-inspired: question-aware utility
+enable_question_aware_utility: true
+enable_lazy_crop_penalty: true
+
+# AdaReasoner-inspired: format gate + asymmetric fusion
+enable_format_gate: true
+format_gate_strict: false
+enable_asymmetric_fusion: true
+asymmetric_lambda_s: 0.3
+asymmetric_lambda_call: 0.7
