@@ -1,0 +1,44 @@
+# Qwen3-VL-8B 工具能力 SFT 冷启动 — LoRA 配置(计划 §3)
+# 2×4090 (48GB),bf16
+# 用法: CUDA_VISIBLE_DEVICES=0,1 llamafactory-cli train sft_qwen3vl_lora.yaml
+
+# 模型
+model_name_or_path: Qwen/Qwen3-VL-8B-Instruct
+template: qwen2_vl          # LLaMA-Factory 的 Qwen-VL 模板(2026 版支持 Qwen3-VL)
+trust_remote_code: true
+
+# LoRA
+finetuning_type: lora
+lora_rank: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target: all            # q,k,v,o,gate,up,down 全线性层
+
+# 数据(见 data/dataset_info.json 注册的 vstar_tool_sft_train/val)
+dataset: vstar_tool_sft_train
+eval_dataset: vstar_tool_sft_val
+dataset_dir: data
+cutoff_len: 8192            # 多轮+图,计划 §3.2
+
+# 训练超参
+learning_rate: 2e-5
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 8   # 等效 batch ≈ 2×2×8 = 32
+eval_strategy: steps
+eval_steps: 200
+save_strategy: steps
+save_steps: 500
+save_total_limit: 3
+logging_steps: 10
+bf16: true
+# 最大图像分辨率 1024,与管线 DISPLAY_MAX 一致(计划 §3.2)
+max_image_size: 1024
+
+# 输出
+output_dir: saves/qwen3vl-8b-lora/vstar_tool_sft
+plot_loss: true
+report_to: none

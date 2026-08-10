@@ -1,0 +1,13 @@
+#!/bin/sh
+# Native git pre-push guard (wired via `git config core.hooksPath .claude/hooks`).
+# Same check as the Claude Code PrePush hook in .claude/settings.json —
+# catches big data / blocked paths before ANY push, AI or manual.
+# Note: prefer `python` over `python3` (Windows Store python3 stub exits 49
+# without running anything); verify each candidate actually executes.
+for PY in python python3; do
+    if command -v "$PY" >/dev/null 2>&1 && "$PY" -c 'import sys' >/dev/null 2>&1; then
+        exec "$PY" "$(dirname "$0")/check_push.py"
+    fi
+done
+echo "[pre-push] no working python found; skipping guard" >&2
+exit 0

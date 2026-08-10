@@ -64,14 +64,18 @@ VStar 原始图片 ──→ 硅基流动 API (Qwen3-VL-8B-Instruct)
                       ↓
                 <tool_call> 多轮交互
                       ↓
-                本地工具执行 (PIL crop/OCR)
+                本地工具执行 (atr/tools/ 注册表: crop/zoom/rotate/ocr)
                       ↓
-                保存轨迹 JSONL
+                保存轨迹 JSONL (ToolTrace 记录)
                       ↓
                 ATR 奖励计算 ←→ 原始奖励计算
                       ↓
                 对比分析报告
 ```
+
+工具集由 `atr/tools/` 注册表（单一真值源）定义：SYSTEM_PROMPT 的 `<tools>`
+JSON schema、工具分发与轨迹记录全部由注册表驱动。当前工具：
+`crop` / `zoom`（兼容旧名 `zoom_in`）/ `rotate` / `ocr`。
 
 ## 6. 环境变量配置
 
@@ -89,6 +93,12 @@ export SILICONFLOW_API_URL="https://api.siliconflow.cn/v1"
 ```
 
 ## 7. 常见问题
+
+**工具集为什么是 crop/zoom/rotate/ocr？select 去哪了？**
+工具定义集中在 `atr/tools/` 注册表。`select`（旧版纯回显 mock）与
+`read_frame`/`extract_frames`/`zoom_out`/`search`（有名无实）已移除。
+旧轨迹重跑分析时，`select` 调用按"未知工具"处理（per-call validity 2→1），
+utility/cost 不受影响。
 
 **OCR 不可用？**
 不影响实验，OCR 会返回 `[No text detected]`，utility 评分中 OCR 相关的信息增益项会偏低。如果你主要验证 crop/zoom/spatial 行为，可以接受。

@@ -1,0 +1,16 @@
+{
+  "vstar_tool_sft_train": {
+    "file_name": "vstar_tool_sft/train.jsonl",
+    "formatting": "sharegpt",
+    "columns": {"messages": "messages"},
+    "tags": {"role_tag": "role", "content_tag": "content",
+             "user_tag": "user", "assistant_tag": "assistant"}
+  },
+  "vstar_tool_sft_val": {
+    "file_name": "vstar_tool_sft/val.jsonl",
+    "formatting": "sharegpt",
+    "columns": {"messages": "messages"},
+    "tags": {"role_tag": "role", "content_tag": "content",
+             "user_tag": "user", "assistant_tag": "assistant"}
+  }
+}

@@ -14,6 +14,8 @@ Our implementation: rule-based (zero extra model cost).
 from typing import List, Dict, Any, Optional
 import re
 
+from ..tools import registry
+
 
 class ToolUtility:
     """Compute utility score for each tool call in a trajectory.
@@ -130,8 +132,9 @@ class ToolUtility:
         # ================================================================
         # Dimension 2: Spatial Precision  (max +0.3)
         # Does spatial tool target the correct region?
+        # 空间工具集合由 atr.tools 注册表派生(当前: crop, zoom)
         # ================================================================
-        if tool in ("crop", "zoom", "select"):
+        if tool in registry.spatial_tools:
 
             # 2a. Matches GT bbox
             if gt and "gt_bbox" in gt:
@@ -156,7 +159,7 @@ class ToolUtility:
                     if all_calls:
                         prev_bboxes = [
                             c.get("bbox") for c in all_calls
-                            if c.get("tool_name", "").lower() in ("crop", "zoom", "select")
+                            if c.get("tool_name", "").lower() in registry.spatial_tools
                             and c.get("bbox") and c is not call
                         ]
                         for pb in prev_bboxes:
@@ -186,24 +189,16 @@ class ToolUtility:
                             score -= 0.2  # redundant OCR
                             break
 
-        elif tool in ("read_frame", "extract_frames") and gt and "gt_time_range" in gt:
-            # Frame reading at the right time is information gain
-            ts = call.get("timestamp") if call.get("timestamp") is not None else call.get("frame_idx")
-            if ts is not None:
-                start, end = gt["gt_time_range"]
-                if start <= ts <= end:
-                    score += 0.3
-
         # ================================================================
         # Progressive refinement bonus
         # A crop that significantly reduces area from previous crop is
         # evidence of targeted analysis → bonus
         # ================================================================
-        if tool in ("crop", "zoom") and call.get("bbox") and all_calls:
+        if tool in registry.spatial_tools and call.get("bbox") and all_calls:
             for prev in reversed(all_calls):
                 if prev is call:
                     break
-                if prev.get("tool_name", "").lower() in ("crop", "zoom") and prev.get("bbox"):
+                if prev.get("tool_name", "").lower() in registry.spatial_tools and prev.get("bbox"):
                     prev_area = (prev["bbox"][2] - prev["bbox"][0]) * (prev["bbox"][3] - prev["bbox"][1])
                     cur_area = (call["bbox"][2] - call["bbox"][0]) * (call["bbox"][3] - call["bbox"][1])
                     if prev_area > 0 and cur_area < prev_area * 0.5:

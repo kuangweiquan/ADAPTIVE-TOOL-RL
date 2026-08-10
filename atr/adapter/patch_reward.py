@@ -9,6 +9,7 @@ and replaces the env_reward + acc_reward logic with ATR.compute().
 
 from typing import Optional, List, Dict, Any
 import re
+import json
 
 from ..reward import AdaptiveToolReward
 from ..config import ATRConfig
@@ -27,8 +28,11 @@ def parse_tool_trajectory(response_str: str) -> List[Dict[str, Any]]:
 
     Returns a list of dicts with:
         - tool_name: str
-        - bbox: [x1,y1,x2,y2] (if available)
+        - bbox: [x1,y1,x2,y2] (if available; 模型输出的 NORMALIZED [0,1] 坐标)
         - output: str  (the tool's return observation, approximated)
+
+    注:bbox 是模型写在文本里的归一化坐标(显示空间),与 reward 层
+    gt_bbox(归一化)/lazy-crop 判定直接同空间比较,无需换算。
     """
     tool_calls = []
 
@@ -36,26 +40,24 @@ def parse_tool_trajectory(response_str: str) -> List[Dict[str, Any]]:
     pattern = re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', re.DOTALL)
     for match in pattern.finditer(response_str):
         try:
-            call_data = eval(match.group(1))
-            if isinstance(call_data, list):
-                call_data = call_data[0] if call_data else {}
-            record = {"tool_name": call_data.get("name", "unknown")}
-            args = call_data.get("arguments", {})
+            call_data = json.loads(match.group(1))
+        except Exception:
+            try:
+                call_data = eval(match.group(1))
+            except Exception:
+                continue
+        if isinstance(call_data, list):
+            call_data = call_data[0] if call_data else {}
+        if not isinstance(call_data, dict):
+            continue
+        record = {"tool_name": call_data.get("name", "unknown")}
+        args = call_data.get("arguments", {})
+        if isinstance(args, dict):
             if "bbox_2d" in args:
                 record["bbox"] = args["bbox_2d"]
             if "label" in args:
                 record["label"] = args["label"]
-            # Approximate output: the text between this tool_call and next
-            tool_calls.append(record)
-        except Exception:
-            continue
-
-    # Fill in approximate outputs (text between consecutive tool calls)
-    segments = pattern.split(response_str)
-    for i, call in enumerate(tool_calls):
-        # Output is the text after </tool_call> and before next <tool_call>
-        idx_in_segments = segments.index  # This won't work properly
-        pass
+        tool_calls.append(record)
 
     return tool_calls
 
@@ -113,12 +115,15 @@ class ATRRewardManager:
         compute_score=None,
         reward_fn_key: str = "data_source",
         atr_config: Optional[ATRConfig] = None,
+        atr_config_dict: Optional[Dict[str, Any]] = None,  # yaml reward_kwargs 直传
         tool_cumulative_reward: float = 0.0,   # set to 0 to disable original tool reward
     ):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
         self.compute_score = compute_score
         self.reward_fn_key = reward_fn_key
+        if atr_config is None and atr_config_dict:
+            atr_config = ATRConfig(**atr_config_dict)
         self.atr = AdaptiveToolReward(config=atr_config or ATRConfig())
         self.tool_cumulative_reward = tool_cumulative_reward
         self.step_cnt = 0
@@ -170,13 +175,21 @@ class ATRRewardManager:
                 question = extra_info.get("question", None)
 
             # — Step 3: Compute ATR reward (question-aware) —
+            # extra_info 契约(数据集侧保证):
+            #   question: 问题文本(utility 的 question-aware 打分)
+            #   gt_bbox:  目标物体 GT bbox,归一化 [x1,y1,x2,y2](utility 的 IoU 匹配)
+            #   options:  选项列表(compute_score 的字母映射匹配)
+            #   image_size: 原始图像尺寸(仅存档,不参与计算)
             atr_reward, components = self.atr.compute(
                 tool_calls=tool_calls,
                 final_answer=response_str,
                 accuracy=accuracy,
                 ground_truth=extra_info,
                 question=question,
-                # image_size can be extracted from env if available
+                # 模型 bbox 是归一化 [0,1] 坐标,lazy-crop 面积比按归一化
+                # 面积直接计算 → image_size 恒为 (1,1)。
+                # (离线评估 trace 记录像素坐标,语义不同,勿混用)
+                image_size=(1.0, 1.0),
             )
             components["accuracy_raw"] = score.get("score", 0.0)
 
@@ -203,25 +216,31 @@ class ATRRewardManager:
 
 
 # —————————————————————————————————————
-#  Quick patch for naive.py
+#  Quick patch for main_ppo.py (推荐集成方式)
 # —————————————————————————————————————
 PATCH_INSTRUCTIONS = '''
-To replace NaiveRewardManager with ATRRewardManager in PyVision-RL:
+To use ATRRewardManager in verl training (verl_agents), patch
+`verl/trainer/main_ppo.py` to add an "atr" branch:
 
---- a/verl_agents/verl/workers/reward_manager/naive.py
-+++ b/verl_agents/verl/workers/reward_manager/naive.py
-@@ -1,3 +1,11 @@
-+import sys
-+sys.path.insert(0, "..")  # add project root
-+from atr.adapter.patch_reward import ATRRewardManager
-+from atr.config import ATRConfig
-+
- # Replace the class at module level:
--NaiveRewardManager
-+NaiveRewardManager = ATRRewardManager
-+
-+# Or for runtime config:
-+# NaiveRewardManager = lambda *a, **kw: ATRRewardManager(*a, **kw, atr_config=ATRConfig(lambda_u=1.0, gamma_c=0.5, eta_s=0.3))
+--- a/verl_agents/verl/trainer/main_ppo.py
++++ b/verl_agents/verl/trainer/main_ppo.py
+@@
+         if reward_manager_name == "naive":
+             from verl.workers.reward_manager import NaiveRewardManager
+
+             reward_manager_cls = NaiveRewardManager
++        elif reward_manager_name == "atr":
++            from atr.adapter.patch_reward import ATRRewardManager
+
++            reward_manager_cls = ATRRewardManager
+         elif reward_manager_name == "prime":
+
+Then in the launch config set:
+  reward_model.reward_manager: atr
+  reward_model.reward_kwargs: {atr_config_dict: {lambda_u: 1.0, gamma_c: 0.5, eta_s: 0.3}}
+  reward_model.custom_reward_function.path: atr.adapter.score
+  reward_model.custom_reward_function.name: compute_vstar_score
+The atr package is importable because /root/code (project root) is on PYTHONPATH.
 '''
 
 if __name__ == "__main__":

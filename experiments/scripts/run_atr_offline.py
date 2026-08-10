@@ -64,6 +64,11 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # ============================================================
+# ATR tool registry imports (单一真值源:工具定义/prompt/轨迹)
+# ============================================================
+from atr.tools import get_tool_schemas, execute as execute_tool, ToolTrace, registry
+
+# ============================================================
 # ATR imports (used in analysis stage)
 # ============================================================
 # These are imported later (analysis functions) to keep rollout
@@ -84,7 +89,8 @@ SILICONFLOW_API_KEY = os.environ.get(
 SILICONFLOW_BASE_URL = os.environ.get("SILICONFLOW_API_URL", "https://api.siliconflow.cn/v1")
 
 # --- Model ---
-MODEL_NAME = "Qwen/Qwen3-VL-8B-Instruct"
+# 可用环境变量 ATR_MODEL 覆盖(换模型不改代码)
+MODEL_NAME = os.environ.get("ATR_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 
 # --- Interaction ---
 MAX_TOOL_TURNS = 8           # Max tool calls per sample
@@ -100,39 +106,79 @@ IMAGE_FACTOR = 28
 MIN_PIXELS = 4 * 28 * 28
 MAX_PIXELS = 16384 * 28 * 28
 
+# --- 模型显示尺寸(坐标空间锚点) ---
+# 所有发给模型的图像统一等比缩放到最长边 DISPLAY_MAX;
+# 模型输出的 bbox_2d 坐标约定为"当前显示图像空间",
+# ToolEnv 自动换算到执行空间(原始分辨率),模型无需心算。
+DISPLAY_MAX = 1024
+
 
 # ============================================================
 #  System Prompt — define available tools + output format
+#  <tools> 段由 atr.tools 注册表生成(单一真值源)
 # ============================================================
 
-SYSTEM_PROMPT = """You are a helpful assistant.
+def build_system_prompt(tool_required: bool = False) -> str:
+    """由 atr.tools 注册表生成 SYSTEM_PROMPT(含坐标空间约定与工作流示例)。
+
+    tool_required=True 时切换为"先工具核实后作答"策略(用于采集工具轨迹)。
+    """
+    schemas = "\n".join(json.dumps(s) for s in get_tool_schemas())
+    if tool_required:
+        answer_policy = (
+            "# Answer policy (IMPORTANT)\n"
+            "1. BEFORE answering, you MUST call a tool to verify the target object:\n"
+            "   zoom into the relevant region (or crop it) and inspect the returned image.\n"
+            "2. Call ONE tool per turn; you may call several tools in sequence.\n"
+            "3. After inspecting tool results, give your final answer in <answer> tags."
+        )
+    else:
+        answer_policy = (
+            "# Answer policy (IMPORTANT)\n"
+            "1. FIRST, answer directly from the full image: <answer>your answer</answer>\n"
+            "2. ONLY if you cannot determine the answer from the full image\n"
+            "   (object too small, text unreadable, details unclear) may you call a tool\n"
+            "   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n"
+            "3. After inspecting tool results, give your final answer in <answer> tags."
+        )
+    return f"""You are a helpful assistant.
 
 # Tools
 You may call one or more functions to assist with the user query.
 You are provided with function signatures within <tools></tools> XML tags:
 <tools>
-{"type":"function","function":{"name":"crop","description":"Crop a region of the image to examine details.","parameters":{"type":"object","properties":{"bbox_2d":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"The bounding box as [x1, y1, x2, y2]."}},"required":["bbox_2d"]}}}
-{"type":"function","function":{"name":"ocr","description":"Extract text from a region of the image.","parameters":{"type":"object","properties":{"bbox_2d":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"The region to read as [x1, y1, x2, y2]."}},"required":[]}}}
-{"type":"function","function":{"name":"zoom_in","description":"Zoom into a region to see fine details.","parameters":{"type":"object","properties":{"bbox_2d":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"The region to zoom into as [x1, y1, x2, y2]."}},"required":["bbox_2d"]}}}
-{"type":"function","function":{"name":"select","description":"Select and identify an object in the image.","parameters":{"type":"object","properties":{"label":{"type":"string","description":"Description of what to select."}},"required":["label"]}}}
+{schemas}
 </tools>
 
 # How to call a tool
 Return a json object with function name and arguments within <tool_call></tool_call> XML tags:
 <tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
+{{"name": <function-name>, "arguments": <args-json-object>}}
 </tool_call>
 
-Example:
+# Coordinate system (IMPORTANT)
+All bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction
+of the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right
+corner of the image you are currently viewing. Do NOT use pixel values.
+Your coordinates are scaled automatically by the tool executor.
+
+{answer_policy}
+
+Tools available:
 <tool_call>
-{"name": "crop", "arguments": {"bbox_2d": [100, 200, 300, 400]}}
+{{"name": "zoom", "arguments": {{"bbox_2d": [0.15, 0.25, 0.28, 0.38]}}}}
 </tool_call>
+Use ocr to read text, rotate only if the image orientation is wrong.
 
-After using tools, provide your answer inside <answer> tags:
+When you have enough evidence, provide your answer inside <answer> tags:
 <answer>your answer</answer>"""
 
 
-def build_user_prompt(question: str, options: Optional[List[str]] = None) -> str:
+SYSTEM_PROMPT = build_system_prompt()
+
+
+def build_user_prompt(question: str, options: Optional[List[str]] = None,
+                      display_size: Optional[Tuple[int, int]] = None) -> str:
     """Build user prompt with question and options."""
     prompt = f"Question: {question}\n"
     if options:
@@ -140,7 +186,8 @@ def build_user_prompt(question: str, options: Optional[List[str]] = None) -> str
         abc_map = {1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'E', 6: 'F'}
         for i, opt in enumerate(options):
             prompt += f"{abc_map.get(i + 1, str(i + 1))}. {opt}\n"
-    prompt += "\nUse tools to examine the image, then answer with the correct option letter in <answer> tags."
+    prompt += ("\nAnswer directly from the full image with the correct option letter in <answer> tags. "
+               "Use a tool only if you cannot determine the answer from the full image.")
     return prompt
 
 
@@ -178,146 +225,107 @@ def pil_to_base64(pil_image: Image.Image, format: str = "PNG") -> str:
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
-def encode_image_file_to_base64(image_path: str, max_size: int = 768) -> str:
-    """Encode an image file to base64, optionally resizing to max_size on longest side."""
-    img = Image.open(image_path)
+def resize_for_display(img: Image.Image, max_side: int = DISPLAY_MAX) -> Tuple[Image.Image, Tuple[int, int]]:
+    """等比缩放到最长边 max_side,返回 (缩放后图像, (显示宽, 显示高))。
+
+    所有发给模型的图像(初始图、crop/zoom/rotate 结果)统一走此函数,
+    保证模型每轮看到的视图尺寸与坐标空间锚点一致。
+    """
     w, h = img.size
-    if max_size and (w > max_size or h > max_size):
-        ratio = max_size / max(w, h)
-        new_size = (int(w * ratio), int(h * ratio))
-        img = img.resize(new_size, Image.LANCZOS)
+    if w <= max_side and h <= max_side:
+        return img.copy(), (w, h)
+    ratio = max_side / max(w, h)
+    new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
+    return img.resize(new_size, Image.LANCZOS), new_size
+
+
+def encode_image_file_to_base64(image_path: str, max_size: int = DISPLAY_MAX) -> str:
+    """Encode an image file to base64, resizing to max_size on longest side."""
+    img = Image.open(image_path)
+    display_img, _ = resize_for_display(img, max_size)
     buffered = BytesIO()
-    img.save(buffered, format="JPEG", quality=85)
+    display_img.save(buffered, format="JPEG", quality=85)
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
 # ============================================================
-#  Tool Environment — executes tools on images locally
+#  Tool Environment — 薄封装:持有图像状态,执行委托 atr.tools 注册表
+#  坐标约定:模型在"当前显示图像空间"输出 bbox,ToolEnv 自动换算到执行空间。
 # ============================================================
 
 class ToolEnv:
-    """Lightweight tool execution environment.
+    """轻量工具执行环境。
 
-    Maintains the current image state (starts as full image, transforms
-    with each spatial tool call). Records all tool calls for later reward
-    computation.
+    维护当前图像状态(初始为原图,zoom/rotate 等状态工具更新它)。
+    所有工具的执行逻辑与轨迹记录委托 atr.tools 注册表(ToolTrace),
+    轨迹格式与 ATR reward 层完全一致。
+
+    坐标空间:
+      - 模型看到的图像统一缩放到最长边 DISPLAY_MAX(显示空间)
+      - 模型输出的 bbox 是显示空间坐标,_to_current_space 换算到执行空间
+      - 轨迹记录 bbox 为执行空间(原始分辨率),与旧数据/GT 标注一致
     """
 
     def __init__(self, image_path: str):
         self.original_image = Image.open(image_path).convert("RGB")
         self.current_image = self.original_image.copy()
         self.original_size = self.original_image.size  # (width, height)
-        self.tool_records: List[Dict[str, Any]] = []
-        self._ocr_available = self._check_ocr()
+        self.trace = ToolTrace()
+        self._last_image_b64: Optional[str] = None
+        # 模型当前所见图像的显示尺寸(坐标空间锚点)
+        _, self.display_size = resize_for_display(self.original_image)
 
-    def _check_ocr(self) -> bool:
-        """Check if pytesseract is available."""
-        try:
-            import pytesseract
-            # Quick test
-            pytesseract.get_tesseract_version()
-            return True
-        except Exception:
-            return False
+    def _to_current_space(self, arguments: dict) -> dict:
+        """把模型输出的归一化 bbox [0,1] 换算到执行空间(current_image 像素)。
 
-    def _record(self, tool_name: str, arguments: dict,
-                output: str, bbox: Optional[List] = None):
-        """Record a tool call in the format ATR expects."""
-        record = {
-            "tool_name": tool_name,
-            "arguments": arguments,
-            "output": output,
-        }
-        if bbox:
-            record["bbox"] = bbox
-        self.tool_records.append(record)
+        归一化坐标与分辨率无关,任何视图状态下换算都一致;
+        轨迹记录 bbox 为像素(执行空间),与旧数据/GT 标注保持一致。
+        """
+        args = dict(arguments)
+        bbox = args.get("bbox_2d") or args.get("bbox")
+        if bbox and len(bbox) == 4:
+            cw, ch = self.current_image.size
+            x1, y1, x2, y2 = bbox
+            args["bbox_2d"] = [x1 * cw, y1 * ch, x2 * cw, y2 * ch]
+        return args
 
-    def crop(self, bbox_2d: List[float]) -> Tuple[Image.Image, str]:
-        """Crop the current image to the specified region.
-
-        Args:
-            bbox_2d: [x1, y1, x2, y2] in pixel coordinates of current image.
+    def execute(self, tool_name: str, arguments: dict) -> Tuple[str, bool]:
+        """执行一个工具调用(注册表分派,显示空间 → 执行空间自动换算)。
 
         Returns:
-            (cropped_image, description_string)
+            (output_desc, produced_new_image): 返回给模型的文本描述;
+            工具是否产生了新图像(crop/zoom/rotate 时 True,并已编码为 b64)。
         """
-        x1, y1, x2, y2 = map(int, bbox_2d)
-        # Clamp to image bounds
-        w, h = self.current_image.size
-        x1 = max(0, min(x1, w))
-        y1 = max(0, min(y1, h))
-        x2 = max(0, min(x2, w))
-        y2 = max(0, min(y2, h))
+        args = self._to_current_space(arguments)
+        try:
+            result = execute_tool(tool_name, args, self.current_image)
+        except KeyError:
+            msg = f"[Unknown tool: {tool_name}]"
+            self.trace.record(tool_name, arguments, output=msg)
+            return msg, False
+        except ValueError as e:
+            # 与旧 dispatch guard 的错误文本一致,如 "[Error: crop requires bbox_2d]"
+            msg = f"[Error: {e}]"
+            self.trace.record(tool_name, arguments, output=msg)
+            return msg, False
+        except Exception as e:
+            msg = f"[Error executing {tool_name}: {e}]"
+            self.trace.record(tool_name, arguments, output=msg)
+            return msg, False
 
-        if x2 <= x1 or y2 <= y1:
-            desc = "[Crop: invalid bbox, region is empty]"
-            self._record("crop", {"bbox_2d": bbox_2d}, output=desc, bbox=[x1, y1, x2, y2])
-            return self.current_image, desc
-
-        cropped = self.current_image.crop((x1, y1, x2, y2))
-        desc = f"[Cropped region ({x1},{y1})-({x2},{y2}), size {x2-x1}×{y2-y1}]"
-        self._record("crop", {"bbox_2d": bbox_2d}, output=desc, bbox=[x1, y1, x2, y2])
-        return cropped, desc
-
-    def zoom_in(self, bbox_2d: List[float]) -> Tuple[Image.Image, str]:
-        """Zoom into a region (crop + resize to original view size)."""
-        x1, y1, x2, y2 = map(int, bbox_2d)
-        w, h = self.current_image.size
-        x1 = max(0, min(x1, w))
-        y1 = max(0, min(y1, h))
-        x2 = max(0, min(x2, w))
-        y2 = max(0, min(y2, h))
-
-        if x2 <= x1 or y2 <= y1:
-            desc = "[ZoomIn: invalid bbox]"
-            self._record("zoom", {"bbox_2d": bbox_2d}, output=desc, bbox=[x1, y1, x2, y2])
-            return self.current_image, desc
-
-        cropped = self.current_image.crop((x1, y1, x2, y2))
-        # Resize back to original view size for zoom effect
-        zoomed = cropped.resize((w, h), Image.BICUBIC)
-        desc = f"[Zoomed into ({x1},{y1})-({x2},{y2})]"
-        self._record("zoom", {"bbox_2d": bbox_2d}, output=desc, bbox=[x1, y1, x2, y2])
-        return zoomed, desc
-
-    def ocr(self, bbox_2d: Optional[List[float]] = None) -> str:
-        """Extract text from a region (or full image if no bbox)."""
-        if bbox_2d:
-            x1, y1, x2, y2 = map(int, bbox_2d)
-            w, h = self.current_image.size
-            x1 = max(0, min(x1, w))
-            y1 = max(0, min(y1, h))
-            x2 = max(0, min(x2, w))
-            y2 = max(0, min(y2, h))
-            target_img = self.current_image.crop((x1, y1, x2, y2))
-        else:
-            target_img = self.current_image
-            bbox_2d = [0, 0, *self.current_image.size]
-
-        text = ""
-        if self._ocr_available:
-            try:
-                import pytesseract
-                # Convert PIL to format tesseract expects
-                text = pytesseract.image_to_string(target_img).strip()
-            except Exception:
-                text = ""
-        else:
-            text = ""
-
-        if not text:
-            text = "[No text detected in region]"
-        else:
-            text = f"[OCR result: \"{text}\"]"
-
-        self._record("ocr", {"bbox_2d": bbox_2d}, output=text, bbox=list(bbox_2d))
-        return text
-
-    def select(self, label: str) -> str:
-        """Select/identify an object."""
-        output = f"[Selected: {label}]"
-        self._record("select", {"label": label}, output=output)
-        return output
+        if result.image is not None:
+            # 统一缩放到显示尺寸后发给模型
+            if registry.get(result.canonical_name).updates_state:
+                # 状态工具(zoom/rotate):工作图像切换,坐标锚点同步更新
+                self.current_image = result.image
+                display_img, self.display_size = resize_for_display(result.image)
+            else:
+                # 非状态工具(crop):裁剪图仅作放大观察,坐标锚点保持主视图不变,
+                # 模型继续在主视图空间输出坐标(约定见 system prompt)
+                display_img, _ = resize_for_display(result.image)
+            self._last_image_b64 = pil_to_base64(display_img)
+        self.trace.record(result.canonical_name, result.arguments, result.output, result.bbox)
+        return result.output, result.image is not None
 
 
 # ============================================================
@@ -462,8 +470,8 @@ def run_single_sample(
     # Initialize tool env
     env = ToolEnv(image_path)
 
-    # Build initial messages
-    user_prompt = build_user_prompt(question, options)
+    # Build initial messages(含当前视图尺寸坐标锚点)
+    user_prompt = build_user_prompt(question, options, display_size=env.display_size)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -524,62 +532,27 @@ def run_single_sample(
             })
             continue
 
-        # Execute tool
+        # Execute tool (注册表分派,内部已捕获所有异常并记录轨迹)
         tool_name = tool_call["name"]
         tool_args = tool_call["arguments"]
-        tool_result = ""
-
-        try:
-            if tool_name in ("crop",):
-                bbox = tool_args.get("bbox_2d") or tool_args.get("bbox")
-                if bbox:
-                    _, desc = env.crop(bbox)
-                    tool_result = desc
-                else:
-                    tool_result = "[Error: crop requires bbox_2d]"
-
-            elif tool_name in ("zoom_in", "zoom"):
-                bbox = tool_args.get("bbox_2d") or tool_args.get("bbox")
-                if bbox:
-                    new_img, desc = env.zoom_in(bbox)
-                    env.current_image = new_img
-                    # Encode the new image to send back to model
-                    new_img_b64 = pil_to_base64(new_img)
-                    tool_result = desc
-                else:
-                    tool_result = "[Error: zoom_in requires bbox_2d]"
-
-            elif tool_name in ("ocr",):
-                bbox = tool_args.get("bbox_2d") or tool_args.get("bbox")
-                tool_result = env.ocr(bbox)
-
-            elif tool_name in ("select",):
-                label = tool_args.get("label", "object")
-                tool_result = env.select(label)
-
-            else:
-                tool_result = f"[Unknown tool: {tool_name}]"
-                env._record(tool_name, tool_args, output=tool_result)
-
-        except Exception as e:
-            tool_result = f"[Error executing {tool_name}: {e}]"
-            env._record(tool_name, tool_args, output=tool_result)
+        tool_result, new_image = env.execute(tool_name, tool_args)
 
         # Format tool response
         tool_response_content = [
             {"type": "text", "text": "<tool_response>"},
         ]
 
-        # If the tool returned a new image, include it
-        if tool_name in ("zoom_in", "zoom") and tool_result.startswith("[Zoomed"):
+        # If the tool returned a new image, include it (zoom/rotate)
+        if new_image and env._last_image_b64:
             tool_response_content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{new_img_b64}"},
+                "image_url": {"url": f"data:image/png;base64,{env._last_image_b64}"},
             })
 
         tool_response_content.append({"type": "text", "text": tool_result})
         tool_response_content.append({"type": "text", "text": "</tool_response>"})
-        tool_response_content.append({"type": "text", "text": "\nContinue analyzing. Call another tool or answer with <answer>...</answer>"})
+        tool_response_content.append({"type": "text", "text":
+            "\nContinue analyzing. Call another tool or answer with <answer>...</answer>"})
 
         # Add to messages
         messages.append({"role": "assistant", "content": response_text})
@@ -609,7 +582,7 @@ def run_single_sample(
         "ground_truth": ground_truth,
         "predicted_answer": predicted_answer,
         "accuracy": accuracy,
-        "tool_calls": env.tool_records,
+        "tool_calls": env.trace.records,
         "image_size": env.original_size,
         "status": status,
         "debug_messages": debug_messages,
@@ -934,6 +907,7 @@ def print_report(stats: Dict[str, Any]):
 # ============================================================
 
 def main():
+    global SYSTEM_PROMPT, TEMPERATURE
     parser = argparse.ArgumentParser(description="ATR Offline Experiment on VStar")
     parser.add_argument("--vstar_path", type=str, required=True,
                         help="Path to VStar benchmark directory")
@@ -946,7 +920,17 @@ def main():
                         help="Skip rollout, analyze existing trajectories")
     parser.add_argument("--trajectories_file", type=str, default=None,
                         help="Path to existing trajectories JSONL (for --analyze_only)")
+    parser.add_argument("--tool_required", action="store_true",
+                        help="强制先工具核实后作答(采集工具轨迹;默认先答后验)")
+    parser.add_argument("--temperature", type=float, default=TEMPERATURE,
+                        help="采样温度(默认 %(default)s;多温度增广用 0.7/0.9/1.1)")
+    parser.add_argument("--skip_existing", action="store_true",
+                        help="断点续跑:跳过 output_dir 中已有轨迹文件里完成的样本")
     args = parser.parse_args()
+
+    # 切换策略:tool_required → 强制工具模式;温度增广
+    SYSTEM_PROMPT = build_system_prompt(tool_required=args.tool_required)
+    TEMPERATURE = args.temperature
 
     # Ensure output dir
     os.makedirs(args.output_dir, exist_ok=True)
@@ -976,6 +960,28 @@ def main():
             random.seed(42)
             samples = random.sample(samples, min(args.quick, len(samples)))
             print(f"  Quick mode: using {len(samples)} samples")
+
+        # 断点续跑:跳过已有轨迹中的样本(编码探测:utf-8 → gbk,Windows 写入可能为 GBK)
+        if args.skip_existing:
+            existing = set()
+            for f in os.listdir(args.output_dir):
+                if not (f.startswith("trajectories_") and f.endswith(".jsonl")):
+                    continue
+                p = os.path.join(args.output_dir, f)
+                for enc in ("utf-8", "gbk"):
+                    try:
+                        for line in open(p, encoding=enc):
+                            try:
+                                existing.add(json.loads(line)["image"])
+                            except Exception:
+                                pass
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            if existing:
+                before = len(samples)
+                samples = [s for s in samples if s[1] not in existing]
+                print(f"  断点续跑:跳过 {before - len(samples)} 个已完成样本,剩余 {len(samples)}")
 
         # Create client
         client = create_client()

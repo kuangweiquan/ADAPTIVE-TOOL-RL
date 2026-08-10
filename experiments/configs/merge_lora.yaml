@@ -1,0 +1,11 @@
+# LoRA 合并 → Qwen3-VL-8B-ATR-SFT(计划 §3.3)
+# 用法: llamafactory-cli export merge_lora.yaml
+
+model_name_or_path: Qwen/Qwen3-VL-8B-Instruct
+adapter_name_or_path: saves/qwen3vl-8b-lora/vstar_tool_sft
+template: qwen2_vl
+finetuning_type: lora
+export_dir: saves/Qwen3-VL-8B-ATR-SFT
+export_size: 5
+export_device: cpu
+trust_remote_code: true

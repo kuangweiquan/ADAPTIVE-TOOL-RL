@@ -3,13 +3,14 @@
 Penalizes:
   - Duplicate crop of the same region (IoU-based)
   - Duplicate OCR on the same text
-  - Repeated frame reads in temporal proximity
   - Zoom-in then zoom-out (pathological oscillation)
-  - Tools called after answer is already determinable
+  - Consecutive identical tools (spam)
 """
 
 from typing import List, Dict, Any, Tuple
 import re
+
+from ..tools import registry
 
 
 class ToolCost:
@@ -35,9 +36,10 @@ class ToolCost:
         costs = [0.0] * len(tool_calls)
 
         # === Type 1: Duplicate spatial operations ===
+        # 空间工具集合由 atr.tools 注册表派生(当前: crop, zoom)
         spatial_indices = [
             i for i, c in enumerate(tool_calls)
-            if c.get("tool_name", "").lower() in ("crop", "zoom", "select")
+            if c.get("tool_name", "").lower() in registry.spatial_tools
                and c.get("bbox") is not None
         ]
         for i in range(len(spatial_indices)):
@@ -69,21 +71,7 @@ class ToolCost:
                 if sim > self.text_sim_threshold:
                     costs[idx_j] = max(costs[idx_j], 0.6)
 
-        # === Type 3: Repeated frame reads close in time ===
-        frame_indices = [
-            i for i, c in enumerate(tool_calls)
-            if c.get("tool_name", "").lower() in ("read_frame", "extract_frames")
-        ]
-        for i in range(len(frame_indices)):
-            for j in range(i + 1, len(frame_indices)):
-                idx_i = frame_indices[i]
-                idx_j = frame_indices[j]
-                t_i = tool_calls[idx_i].get("timestamp", tool_calls[idx_i].get("frame_idx", 0))
-                t_j = tool_calls[idx_j].get("timestamp", tool_calls[idx_j].get("frame_idx", 0))
-                if t_i is not None and t_j is not None:
-                    if abs(float(t_i) - float(t_j)) < self.frame_time_threshold:
-                        costs[idx_j] = max(costs[idx_j], 0.5)
-
+        # === Type 3: (removed) repeated frame reads — 视频工具未实现 ===
         # === Type 4: Zoom oscillation (zoom in → zoom out → same region) ===
         for i in range(1, len(tool_calls) - 1):
             prev = tool_calls[i - 1].get("tool_name", "").lower()

@@ -13,6 +13,11 @@ Adaptive-Tool-RL/
 │       └── reward.py     # [被替换] 原始 reward 函数
 │
 ├── atr/                  # 🟢 核心贡献代码
+│   ├── tools/           # 🛠️ 工具定义单一真值源（VisualTool 注册表）
+│   │   ├── base.py      #   VisualTool ABC + ToolRegistry
+│   │   ├── image_tools.py # crop / zoom / rotate / ocr 实现
+│   │   ├── trace.py     #   ToolTrace（ATR 轨迹记录格式）
+│   │   └── __init__.py  #   registry / get_tool_schemas() / execute()
 │   ├── reward/
 │   │   ├── utility.py   # U: Tool Utility（源自 CodeV 思想）
 │   │   ├── cost.py      # C: Redundant Cost（重复检测）
@@ -25,7 +30,7 @@ Adaptive-Tool-RL/
 │
 ├── experiments/
 │   ├── configs/         # 实验配置 (YAML)
-│   ├── scripts/         # 运行脚本
+│   ├── scripts/         # 运行脚本（含 smoke_tool_refactor.py 冒烟测试）
 │   └── results/         # 实验结果输出
 │
 ├── knowledge-base/      # 📚 论文资料 & 引用映射
@@ -48,6 +53,22 @@ Adaptive-Tool-RL/
 | Sequence | S | 工具序列合理性（crop→OCR 好于 OCR→crop→OCR） | AdaReasoner 思想 |
 
 **公式**：`R = acc + λ·U − γ·C + η·S`
+
+## 工具定义
+
+工具定义集中于 [atr/tools/](atr/tools/) 注册表（**单一真值源**），离线管线的
+SYSTEM_PROMPT 生成、工具分发、轨迹记录与奖励层的工具名校验全部由注册表驱动：
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `crop` | `bbox_2d` | 裁剪区域（不更新图像状态） |
+| `zoom` | `bbox_2d` | 裁剪 + 缩放回原视图（更新图像状态；兼容旧名 `zoom_in`） |
+| `rotate` | `angle` | 旋转（更新图像状态） |
+| `ocr` | `bbox_2d`? | 区域/全文 OCR（pytesseract，可选依赖） |
+
+- 调用格式：`<tool_call>{"name": ..., "arguments": {...}}</tool_call>`（JSON action）
+- 轨迹记录：`{tool_name, arguments, output, bbox?}`（ToolTrace，ATR reward 直接消费）
+- 已移除：`select`（假实现）、`read_frame`/`extract_frames`/`zoom_out`/`search`（有名无实）
 
 ## 快速开始
 

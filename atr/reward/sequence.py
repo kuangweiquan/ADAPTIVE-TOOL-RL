@@ -16,6 +16,15 @@ it with AdaReasoner's per-call quality scoring.
 
 from typing import List, Dict, Any, Tuple
 
+from ..tools import registry
+
+# 由 atr.tools 注册表派生的合法参数集合(单一真值源):
+#   参数键 = schema properties 键 ∪ 参数别名
+VALID_PARAMS: Dict[str, set] = {
+    name: registry.param_names(name) | set(registry.param_aliases(name))
+    for name in registry.tool_names
+}
+
 
 class SequenceQuality:
     """Evaluate tool sequence quality combining:
@@ -25,12 +34,12 @@ class SequenceQuality:
     """
 
     # — Preferred patterns (our original) —
+    # 工具名以 atr.tools 注册表为准(select/read_frame 等已移除)
     PREFERRED_PATTERNS: List[Tuple[Tuple[str, ...], str, float]] = [
         (("crop", "ocr"), "crop-then-read", 0.4),
         (("crop", "zoom", "ocr"), "locate-zoom-read", 0.6),
         (("zoom", "ocr"), "zoom-then-read", 0.4),
-        (("read_frame", "ocr"), "frame-then-ocr", 0.4),
-        (("select", "crop", "ocr"), "select-crop-read", 0.5),
+        (("zoom", "rotate", "ocr"), "rotate-zoom-read", 0.5),
         (("crop", "ocr", "answer"), "crop-read-answer", 0.5),
     ]
 
@@ -130,9 +139,10 @@ class SequenceQuality:
             return 0
 
         # — Level 1 check: Tool name —
-        valid_tools = {"crop", "zoom", "ocr", "select", "read_frame", "extract_frames",
-                       "zoom_in", "zoom_out", "answer", "search"}
-        if tool_name.lower() not in valid_tools:
+        # 合法名 = atr.tools 注册表(规范名 + alias);
+        # select / read_frame / zoom_out / search 等未注册名 → 1
+        name = registry.canonical(tool_name.lower())
+        if name is None:
             return 1
 
         # — Level 2 check: Parameter names —
@@ -140,19 +150,8 @@ class SequenceQuality:
         if not isinstance(params, dict):
             return 2
 
-        # Check if param names are valid for this tool
-        valid_params = {
-            "crop": {"bbox", "bbox_2d", "region", "x1", "y1", "x2", "y2", "area"},
-            "zoom": {"bbox", "bbox_2d", "region", "scale", "factor"},
-            "zoom_in": {"bbox", "bbox_2d", "region", "scale", "factor"},
-            "zoom_out": {"factor"},
-            "ocr": {"bbox", "bbox_2d", "region", "area"},
-            "select": {"bbox", "bbox_2d", "region", "label", "object"},
-            "read_frame": {"frame_idx", "timestamp", "frame", "index"},
-            "extract_frames": {"start", "end", "interval", "count", "frame_idx"},
-            "search": {"query", "term", "keyword"},
-        }
-        allowed = valid_params.get(tool_name.lower(), set())
+        # 合法参数 = 注册表 schema 参数键 ∪ 参数别名
+        allowed = VALID_PARAMS.get(name, set())
         if allowed and params:
             param_names = set(k.lower() for k in params.keys())
             unknown = param_names - allowed
@@ -161,7 +160,7 @@ class SequenceQuality:
                 return 2
 
         # — Level 3 check: Parameter values (content) —
-        if tool_name.lower() in ("crop", "zoom", "zoom_in", "select"):
+        if name in registry.spatial_tools:  # crop / zoom
             bbox = call.get("bbox") or params.get("bbox") or params.get("bbox_2d")
             if bbox:
                 if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
@@ -173,12 +172,12 @@ class SequenceQuality:
                 else:
                     return 2
             return 2  # valid structure but no bbox for spatial tool
-        elif tool_name.lower() in ("read_frame",):
-            frame = call.get("frame_idx") or params.get("frame_idx") or params.get("timestamp")
-            if frame is not None and isinstance(frame, (int, float)):
+        elif name == "rotate":
+            angle = params.get("angle")
+            if isinstance(angle, (int, float)):
                 return 3
             return 2
-        elif tool_name.lower() == "ocr":
+        elif name == "ocr":
             return 3  # OCR without params is valid (reads whole selected region)
 
         return 3
