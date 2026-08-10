@@ -37,11 +37,24 @@ data/
 *.parquet
 *.npy
 
+# Large binary data sets (transfer via bundle tar / cloud drive, NOT git)
+datasets/vstar_bench/direct_attributes/
+datasets/vstar_bench/relative_position/
+datasets/vstar_bench/crops/
+datasets/vstar_bench/sft_images/
+datasets/vstar_bench/sft_v1_backup/
+
+# Large transfer bundles
+*.tar.gz
+
 # Caches
 .cache/
 
 # Large PDFs (track references, not raw papers if too big)
 # knowledge-base/*.pdf is tracked (small reference set)
+
+# Claude Code machine-local settings (not synced)
+.claude/settings.local.json
 
 # OS
 Thumbs.db

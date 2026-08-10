@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push:*)",
+      "Bash(ls:*)",
+      "Bash(python experiments/scripts/smoke_*:*)"
+    ]
+  },
+  "hooks": {
+    "PrePush": [
+      {
+        "matcher": "git push*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/check_push.py || python3 .claude/hooks/check_push.py",
+            "timeout": 30,
+            "statusMessage": "检查推送内容（大数据/禁用路径）..."
+          }
+        ]
+      }
+    ]
+  }
+}
