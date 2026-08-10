@@ -276,3 +276,12 @@ cd /root/code && bash run_vstar_grpo.sh > /dev/null  # 观察前 1 个 step
 - 判定：answer-first 62% ≥ 30% 阈值 → 决策树分支 1，直接进入 RL（本手稿）
 - RL 起点 = SFT v2 合并权重；SFT v1/v2 的 checkpoint 与 LoRA 权重保持不动
 - 04 遗留项：**v2 的 IoU 指标缺失** → B6 第 4 步补上
+
+---
+
+## 远端执行记录 2026-08-10（GPU 开机前，纯 CPU 段）
+
+- **磁盘清理**：已删 `/root/autodl-tmp/models/Qwen3-VL-8B-Instruct`（17G 基线原版，用户批准），autodl-tmp 13G → 25G，可容纳 8B 全量 checkpoint。
+- **数据包就绪**：`images.zip`（281MB）解压 → `datasets/vstar_bench/{direct_attributes,relative_position}/`，191 样本（115 + 76），与 B1 期望一致。
+- **B1 转换完成**：`vstar_to_verl_parquet.py` 跑通 → `datasets/vstar_bench/rl/{train,val}.parquet`（train=171 / val=20，8 列 schema 验证通过：prompt 含 system + `<image>` 占位、mm_hint 绝对路径、env_name=vstar_tool_env、gt_bbox 归一化）。
+- **待办**：用户开 GPU 后执行 B5 冒烟训练（train_batch=2, n=2, max_turns=2, total_epochs=1）→ B7 全量 GRPO。
