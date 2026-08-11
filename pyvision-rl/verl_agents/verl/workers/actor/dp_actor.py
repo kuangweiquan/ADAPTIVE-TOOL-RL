@@ -31,7 +31,7 @@ from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, kl_penalt
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.py_functional import append_to_dict
 from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
-from verl.utils.torch_functional import logprobs_from_logits
+from verl.utils.torch_functional import logprobs_from_hidden, logprobs_from_logits
 from verl.utils.ulysses import gather_outpus_and_unpad, ulysses_pad_and_slice_inputs
 from verl.workers.actor import BasePPOActor
 # from verl.trainer.ppo.filter_fn_utils import max_interaction_budget_filter_fn
@@ -123,22 +123,89 @@ class DataParallelPPOActor(BasePPOActor):
                     position_ids=position_ids_rmpad,
                     **multi_modal_inputs,
                     use_cache=False,
+                    # 2x24G: skip lm_head when entropy is not needed; the
+                    # chunked logprobs_from_hidden then keeps logits/dlogits
+                    # memory bounded to a single vocab chunk
+                    return_hidden_states=not calculate_entropy,
                 )  # prevent model thinks we are generating
-                logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
 
-                logits_rmpad.div_(temperature)
-
-                # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
-                inplace_backward = True
                 if calculate_entropy:
-                    inplace_backward = False
-                log_probs = logprobs_from_logits(
-                    logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward
-                )
-
-                # compute entropy
-                if calculate_entropy:
+                    logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
+                    logits_rmpad.div_(temperature)
+                    log_probs = logprobs_from_logits(
+                        logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=False
+                    )
+                    # compute entropy
                     entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
+                else:
+                    hidden_f = output.hidden_states.squeeze(0)
+                    # FSDP flattens lm_head into a 1D shard; calling the
+                    # module (instead of reading .weight) runs inside the
+                    # FSDP pre/post hooks, where the weight is the full
+                    # unsharded flat view. Patch the instance forward to do
+                    # the chunked log-softmax there so gradients are
+                    # reduced by FSDP normally.
+                    lm_head_module = self.actor_module.lm_head
+                    if not getattr(lm_head_module, "_vstar_chunked_fwd", False):
+                        def _vstar_chunked_forward(x):
+                            # FSDP shards lm_head across ranks; a rank may
+                            # hold zero rows of the vocab (flat-param
+                            # boundary). The full weight must be identical
+                            # on every rank for the DP-parallel log_probs.
+                            # Cheap path: the rank that owns the whole
+                            # shard broadcasts it (backward credits only
+                            # that rank). Fallback: variable-size all_gather
+                            # if the shard boundary splits the vocab.
+                            local = lm_head_module.weight.view(-1, x.shape[-1])
+                            world = torch.distributed.get_world_size()
+                            if world == 1:
+                                w = local
+                            else:
+                                k = torch.tensor(local.shape[0], device=x.device, dtype=torch.long)
+                                sizes = [
+                                    torch.empty(1, dtype=torch.long, device=x.device) for _ in range(world)
+                                ]
+                                torch.distributed.all_gather(sizes, k)  # row counts only (tiny)
+                                total_rows = sum(int(s.item()) for s in sizes)
+                                full_ranks = [i for i, s in enumerate(sizes) if int(s.item()) == total_rows]
+                                free_mem, _ = torch.cuda.mem_get_info()
+                                print(
+                                    f"[CHUNK] local={tuple(local.shape)} rows={[int(s.item()) for s in sizes]} "
+                                    f"free={free_mem/1e9:.2f}G",
+                                    flush=True,
+                                )
+                                if full_ranks:
+                                    src = full_ranks[0]
+                                    if int(k.item()) == total_rows:
+                                        w = local
+                                        torch.distributed.broadcast(w, src=src)
+                                    else:
+                                        w = torch.empty(
+                                            total_rows, x.shape[-1], dtype=local.dtype, device=x.device
+                                        )
+                                        torch.distributed.broadcast(w, src=src)
+                                else:
+                                    # split shard: gather row ranges and splice
+                                    max_k = max(int(s.item()) for s in sizes)
+                                    padded = torch.zeros(max_k, x.shape[-1], dtype=local.dtype, device=x.device)
+                                    padded[: local.shape[0]] = local
+                                    gathered = [torch.empty_like(padded) for _ in range(world)]
+                                    torch.distributed.all_gather(gathered, padded)
+                                    w = torch.cat(
+                                        [g[: int(s.item())] for g, s in zip(gathered, sizes)], dim=0
+                                    )
+                            return logprobs_from_hidden(
+                                hidden=x,
+                                lm_head_weight=w,
+                                labels=lm_head_module._vstar_labels,
+                                temperature=lm_head_module._vstar_temp,
+                            )
+
+                        lm_head_module.forward = _vstar_chunked_forward
+                        lm_head_module._vstar_chunked_fwd = True
+                    lm_head_module._vstar_labels = input_ids_rmpad_rolled
+                    lm_head_module._vstar_temp = temperature
+                    log_probs = lm_head_module(hidden_f)
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -220,6 +287,7 @@ class DataParallelPPOActor(BasePPOActor):
         micro_batch_size = data.meta_info["micro_batch_size"]
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
+        indices = None  # set by the dynamic-bsz branch; multi-modal branch chunks by micro_batch_size
 
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         batch = data.select(batch_keys=select_keys).batch
@@ -255,7 +323,9 @@ class DataParallelPPOActor(BasePPOActor):
         entropys = None
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
-        if use_dynamic_bsz:
+        # multi-modal branch splits by micro_batch_size and produces no
+        # `indices`; only rearrange when the dynamic-bsz branch ran
+        if use_dynamic_bsz and indices is not None:
             indices = list(itertools.chain.from_iterable(indices))
             assert len(indices) == log_probs.size(0), f"{len(indices)} vs. {log_probs.size()}"
             revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
@@ -342,6 +412,12 @@ class DataParallelPPOActor(BasePPOActor):
                     entropy, log_prob = self._forward_micro_batch(
                         micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy
                     )
+                    free_mem, _ = torch.cuda.mem_get_info()
+                    print(
+                        f"[MB diag] post-fwd: alloc={torch.cuda.memory_allocated()/1e9:.2f}G "
+                        f"reserved={torch.cuda.memory_reserved()/1e9:.2f}G free={free_mem/1e9:.2f}G",
+                        flush=True,
+                    )
 
 ########################################################################################################################
                     # print(f"shape of response mask: {response_mask.shape}")
@@ -416,7 +492,22 @@ class DataParallelPPOActor(BasePPOActor):
                         loss = policy_loss * (len(data) / self.config.ppo_mini_batch_size)
                     else:
                         loss = policy_loss / self.gradient_accumulation
+                    free_mem, _ = torch.cuda.mem_get_info()
+                    print(
+                        f"[MB diag] pre-bwd: alloc={torch.cuda.memory_allocated()/1e9:.2f}G "
+                        f"reserved={torch.cuda.memory_reserved()/1e9:.2f}G free={free_mem/1e9:.2f}G",
+                        flush=True,
+                    )
+                    # 2x24G: free reserved-but-unallocated physical pages
+                    # before backward; every MB counts at this margin
+                    torch.cuda.empty_cache()
                     loss.backward()
+                    free_mem, _ = torch.cuda.mem_get_info()
+                    print(
+                        f"[MB diag] post-bwd: alloc={torch.cuda.memory_allocated()/1e9:.2f}G "
+                        f"reserved={torch.cuda.memory_reserved()/1e9:.2f}G free={free_mem/1e9:.2f}G",
+                        flush=True,
+                    )
 
                     data = {
                         "actor/pg_loss": pg_loss.detach().item(),

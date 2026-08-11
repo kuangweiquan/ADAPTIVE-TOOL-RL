@@ -233,13 +233,14 @@ class RLHFDataset(Dataset):
                     raw_prompt = self.processor.apply_chat_template(
                         messages, add_generation_prompt=True, tokenize=False
                     )
-                    # images = [process_image(image) for image in doc[image_key]] if image_key in doc else None
-                    # videos = [process_video(video) for video in doc[video_key]] if video_key in doc else None
+                    # pyvision data uses mm_hint (hint_path) instead of image_key;
+                    # without the image the "<image>" token is not expanded and
+                    # the length is drastically underestimated
+                    images = None
+                    if "mm_hint" in doc and doc["mm_hint"].get("hint_type") == "image":
+                        images = [process_image(doc["mm_hint"]["hint_path"], self.min_pixels, self.max_pixels)]
 
-                    images = [process_image(image) for image in [doc[image_key]]] if image_key in doc else None
-                    videos = [process_video(video) for video in [doc[video_key]]] if video_key in doc else None
-
-                    return len(processor(text=[raw_prompt], images=images, videos=videos)["input_ids"][0])
+                    return len(processor(text=[raw_prompt], images=images)["input_ids"][0])
 
             else:
 

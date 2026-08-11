@@ -102,7 +102,12 @@ class vLLMRollout(BaseRollout):
                     tensor_model_parallel_size=tensor_parallel_size, num_tp_per_train_tp=num_tp_per_train_tp
                 )
 
-        assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, (
+        # Qwen3-VL DeepStack: max_position_embeddings lives in text_config (nested)
+        mpe = getattr(model_hf_config, "text_config", None)
+        max_position_embeddings = getattr(mpe, "max_position_embeddings", None)
+        if max_position_embeddings is None:
+            max_position_embeddings = model_hf_config.max_position_embeddings
+        assert max_position_embeddings >= config.prompt_length + config.response_length, (
             "model context length should be greater than total sequence length"
         )
 

@@ -46,6 +46,57 @@ def gather_from_labels(data, label):
     return output
 
 
+def logprobs_from_hidden(
+    hidden: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 1.0,
+    chunk: int = 4096,
+) -> torch.Tensor:
+    """Memory-bounded lm_head + log-softmax, chunked over the vocab.
+
+    Computes log_softmax one vocab chunk at a time instead of materializing
+    the full (nnz, vocab) logits; the backward pass likewise only creates a
+    chunk-sized dlogits. Needed on 2x24G where the FSDP unshard (17.5G)
+    plus a full logits/dlogits pair would exceed physical memory.
+
+    `hidden` is the bf16 last_hidden_state from the model; we keep the
+    matmul in bf16 (autocast) and promote the chunk to fp32 for a stable
+    logsumexp. `temperature` is applied on the logits, matching the
+    original logits.div_(temperature) path.
+    """
+    assert hidden.dim() == 2 and labels.dim() == 1, (hidden.shape, labels.shape)
+    vocab = lm_head_weight.shape[0]
+    n = hidden.shape[0]
+    device = hidden.device
+    if vocab == 0:
+        # FSDP shard view: this rank holds no lm_head bytes. The chunked path
+        # needs the full weight; callers must gather it (summon_full_params).
+        raise RuntimeError(
+            f"[CHUNK] lm_head_weight shape={tuple(lm_head_weight.shape)} (empty shard view). "
+            "Full weight required; gather it in the caller."
+        )
+
+    label_logits = torch.empty(n, device=device, dtype=torch.float32)
+    lse = None
+    for start in range(0, vocab, chunk):
+        end = min(start + chunk, vocab)
+        w_chunk = lm_head_weight[start:end]  # (chunk, hidden) bf16
+        logits_chunk = (hidden @ w_chunk.T).float()  # (nnz, chunk) -> fp32
+        logits_chunk.div_(temperature)
+        lse_chunk = torch.logsumexp(logits_chunk, dim=-1)  # (nnz,)
+        if lse is None:
+            lse = lse_chunk
+        else:
+            m = torch.maximum(lse, lse_chunk)
+            lse = m + torch.log(torch.exp(lse - m) + torch.exp(lse_chunk - m))
+        mask = (labels >= start) & (labels < end)
+        if mask.any():
+            label_logits[mask] = logits_chunk[mask, labels[mask] - start]
+        del logits_chunk, lse_chunk
+    return label_logits - lse
+
+
 def logprobs_from_logits(logits, labels, inplace_backward=True):
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591

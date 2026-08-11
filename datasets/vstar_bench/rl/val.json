@@ -1,0 +1,886 @@
+[
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the van?\nOptions:\nA. The color of the van is red.\nB. The color of the van is silver.\nC. The color of the van is black.\nD. The color of the van is white.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_10204.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the van is red.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the van is red.",
+  "extra_info": {
+   "question": "What is the color of the van?",
+   "options": [
+    "The color of the van is red.",
+    "The color of the van is silver.",
+    "The color of the van is black.",
+    "The color of the van is white."
+   ],
+   "gt_bbox": [
+    0.2311111111111111,
+    0.668,
+    0.25955555555555554,
+    0.6873333333333334
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 2
+  },
+  "uid": "direct_attributes/sa_10204.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_10204.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the material of the glove?\nOptions:\nA. The material of the glove is rubber.\nB. The material of the glove is cotton.\nC. The material of the glove is leather.\nD. The material of the glove is kevlar.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_4690.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The material of the glove is rubber.",
+   "style": "model"
+  },
+  "ground_truth": "The material of the glove is rubber.",
+  "extra_info": {
+   "question": "What is the material of the glove?",
+   "options": [
+    "The material of the glove is rubber.",
+    "The material of the glove is cotton.",
+    "The material of the glove is leather.",
+    "The material of the glove is kevlar."
+   ],
+   "gt_bbox": [
+    0.282,
+    0.09466666666666666,
+    0.3595,
+    0.19933333333333333
+   ],
+   "image_size": [
+    2000,
+    1500
+   ],
+   "index": 64
+  },
+  "uid": "direct_attributes/sa_4690.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_4690.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the watchband?\nOptions:\nA. The color of the watchband is purple.\nB. The color of the watchband is black.\nC. The color of the watchband is blue.\nD. The color of the watchband is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_11405.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the watchband is purple.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the watchband is purple.",
+  "extra_info": {
+   "question": "What is the color of the watchband?",
+   "options": [
+    "The color of the watchband is purple.",
+    "The color of the watchband is black.",
+    "The color of the watchband is blue.",
+    "The color of the watchband is red."
+   ],
+   "gt_bbox": [
+    0.9433333333333334,
+    0.5225,
+    0.9693333333333334,
+    0.53
+   ],
+   "image_size": [
+    1500,
+    2000
+   ],
+   "index": 12
+  },
+  "uid": "direct_attributes/sa_11405.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_11405.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the steel ladder on the left or right side of the wagon?\nOptions:\nA. The steel ladder is on the left side of the wagon.\nB. The steel ladder is on the right side of the wagon.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_79958.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The steel ladder is on the left side of the wagon.",
+   "style": "model"
+  },
+  "ground_truth": "The steel ladder is on the left side of the wagon.",
+  "extra_info": {
+   "question": "Is the steel ladder on the left or right side of the wagon?",
+   "options": [
+    "The steel ladder is on the left side of the wagon.",
+    "The steel ladder is on the right side of the wagon."
+   ],
+   "gt_bbox": [
+    0.4372788045615415,
+    0.4573333333333333,
+    0.44553676759732597,
+    0.4886666666666667
+   ],
+   "image_size": [
+    2543,
+    1500
+   ],
+   "index": 186
+  },
+  "uid": "relative_position/sa_79958.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_79958.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the kid with black shirt on the left or right side of the kid with blue shirt?\nOptions:\nA. The kid with black shirt is on the left side of the kid with blue shirt.\nB. The kid with black shirt is on the right side of the kid with blue shirt.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_4953.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The kid with black shirt is on the left side of the kid with blue shirt.",
+   "style": "model"
+  },
+  "ground_truth": "The kid with black shirt is on the left side of the kid with blue shirt.",
+  "extra_info": {
+   "question": "Is the kid with black shirt on the left or right side of the kid with blue shirt?",
+   "options": [
+    "The kid with black shirt is on the left side of the kid with blue shirt.",
+    "The kid with black shirt is on the right side of the kid with blue shirt."
+   ],
+   "gt_bbox": [
+    0.5311111111111111,
+    0.478,
+    0.5457777777777778,
+    0.5266666666666666
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 148
+  },
+  "uid": "relative_position/sa_4953.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_4953.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the telephone?\nOptions:\nA. The color of the telephone is orange.\nB. The color of the telephone is blue.\nC. The color of the telephone is green.\nD. The color of the telephone is white.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_30034.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the telephone is orange.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the telephone is orange.",
+  "extra_info": {
+   "question": "What is the color of the telephone?",
+   "options": [
+    "The color of the telephone is orange.",
+    "The color of the telephone is blue.",
+    "The color of the telephone is green.",
+    "The color of the telephone is white."
+   ],
+   "gt_bbox": [
+    0.3582222222222222,
+    0.7173333333333334,
+    0.36933333333333335,
+    0.736
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 36
+  },
+  "uid": "direct_attributes/sa_30034.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_30034.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the blue mask on the left or right side of the black mask?\nOptions:\nA. The blue mask is on the left side of the black mask.\nB. The blue mask is on the right side of the black mask.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_7621.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The blue mask is on the left side of the black mask.",
+   "style": "model"
+  },
+  "ground_truth": "The blue mask is on the left side of the black mask.",
+  "extra_info": {
+   "question": "Is the blue mask on the left or right side of the black mask?",
+   "options": [
+    "The blue mask is on the left side of the black mask.",
+    "The blue mask is on the right side of the black mask."
+   ],
+   "gt_bbox": [
+    0.312,
+    0.258,
+    0.34355555555555556,
+    0.3253333333333333
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 180
+  },
+  "uid": "relative_position/sa_7621.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_7621.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the blue bench on the left or right side of the green door?\nOptions:\nA. The blue bench is on the left side of the green door.\nB. The blue bench is on the right side of the green door.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_80084.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The blue bench is on the left side of the green door.",
+   "style": "model"
+  },
+  "ground_truth": "The blue bench is on the left side of the green door.",
+  "extra_info": {
+   "question": "Is the blue bench on the left or right side of the green door?",
+   "options": [
+    "The blue bench is on the left side of the green door.",
+    "The blue bench is on the right side of the green door."
+   ],
+   "gt_bbox": [
+    0.2568888888888889,
+    0.6673333333333333,
+    0.2991111111111111,
+    0.7313333333333333
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 187
+  },
+  "uid": "relative_position/sa_80084.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_80084.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the parachute?\nOptions:\nA. The color of the parachute is yellow.\nB. The color of the parachute is blue.\nC. The color of the parachute is green.\nD. The color of the parachute is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_5387.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the parachute is yellow.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the parachute is yellow.",
+  "extra_info": {
+   "question": "What is the color of the parachute?",
+   "options": [
+    "The color of the parachute is yellow.",
+    "The color of the parachute is blue.",
+    "The color of the parachute is green.",
+    "The color of the parachute is red."
+   ],
+   "gt_bbox": [
+    0.5755555555555556,
+    0.05333333333333334,
+    0.5933333333333334,
+    0.08866666666666667
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 73
+  },
+  "uid": "direct_attributes/sa_5387.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_5387.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the woman's bikini?\nOptions:\nA. The color of the woman's bikini is black.\nB. The color of the woman's bikini is red.\nC. The color of the woman's bikini is white.\nD. The color of the woman's bikini is yellow.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_11528.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the woman's bikini is black.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the woman's bikini is black.",
+  "extra_info": {
+   "question": "What is the color of the woman's bikini?",
+   "options": [
+    "The color of the woman's bikini is black.",
+    "The color of the woman's bikini is red.",
+    "The color of the woman's bikini is white.",
+    "The color of the woman's bikini is yellow."
+   ],
+   "gt_bbox": [
+    0.11333333333333333,
+    0.583444001770695,
+    0.126,
+    0.5976095617529881
+   ],
+   "image_size": [
+    1500,
+    2259
+   ],
+   "index": 13
+  },
+  "uid": "direct_attributes/sa_11528.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_11528.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the motorcycle on the left or right side of the street?\nOptions:\nA. The motorcycle is on the left side of the street.\nB. The motorcycle is on the right side of the street.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_57960.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The motorcycle is on the left side of the street.",
+   "style": "model"
+  },
+  "ground_truth": "The motorcycle is on the left side of the street.",
+  "extra_info": {
+   "question": "Is the motorcycle on the left or right side of the street?",
+   "options": [
+    "The motorcycle is on the left side of the street.",
+    "The motorcycle is on the right side of the street."
+   ],
+   "gt_bbox": [
+    0.8826666666666667,
+    0.6293333333333333,
+    0.904,
+    0.6471111111111111
+   ],
+   "image_size": [
+    1500,
+    2250
+   ],
+   "index": 160
+  },
+  "uid": "relative_position/sa_57960.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_57960.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the man's cap?\nOptions:\nA. The color of the man's cap is black.\nB. The color of the man's cap is white.\nC. The color of the man's cap is green.\nD. The color of the man's cap is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_13337.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the man's cap is black.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the man's cap is black.",
+  "extra_info": {
+   "question": "What is the color of the man's cap?",
+   "options": [
+    "The color of the man's cap is black.",
+    "The color of the man's cap is white.",
+    "The color of the man's cap is green.",
+    "The color of the man's cap is red."
+   ],
+   "gt_bbox": [
+    0.3333333333333333,
+    0.5671111111111111,
+    0.346,
+    0.5733333333333334
+   ],
+   "image_size": [
+    1500,
+    2250
+   ],
+   "index": 15
+  },
+  "uid": "direct_attributes/sa_13337.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_13337.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the red vehicle on the left or right side of the sculpture?\nOptions:\nA. The red vehicle is on the right side of the sculpture.\nB. The red vehicle is on the left side of the sculpture.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_5465.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The red vehicle is on the right side of the sculpture.",
+   "style": "model"
+  },
+  "ground_truth": "The red vehicle is on the right side of the sculpture.",
+  "extra_info": {
+   "question": "Is the red vehicle on the left or right side of the sculpture?",
+   "options": [
+    "The red vehicle is on the right side of the sculpture.",
+    "The red vehicle is on the left side of the sculpture."
+   ],
+   "gt_bbox": [
+    0.8484444444444444,
+    0.4066666666666667,
+    0.8924444444444445,
+    0.42866666666666664
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 155
+  },
+  "uid": "relative_position/sa_5465.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_5465.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the helmet?\nOptions:\nA. The color of the helmet is green.\nB. The color of the helmet is blue.\nC. The color of the helmet is white.\nD. The color of the helmet is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_39678.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the helmet is green.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the helmet is green.",
+  "extra_info": {
+   "question": "What is the color of the helmet?",
+   "options": [
+    "The color of the helmet is green.",
+    "The color of the helmet is blue.",
+    "The color of the helmet is white.",
+    "The color of the helmet is red."
+   ],
+   "gt_bbox": [
+    0.29688888888888887,
+    0.548,
+    0.30533333333333335,
+    0.5606666666666666
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 53
+  },
+  "uid": "direct_attributes/sa_39678.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_39678.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the man with green shorts on the left or right side of the blue boat?\nOptions:\nA. The man with green shorts is on the left side of the blue boat.\nB. The man with green shorts is on the right side of the blue boat.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_31038.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The man with green shorts is on the left side of the blue boat.",
+   "style": "model"
+  },
+  "ground_truth": "The man with green shorts is on the left side of the blue boat.",
+  "extra_info": {
+   "question": "Is the man with green shorts on the left or right side of the blue boat?",
+   "options": [
+    "The man with green shorts is on the left side of the blue boat.",
+    "The man with green shorts is on the right side of the blue boat."
+   ],
+   "gt_bbox": [
+    0.16266666666666665,
+    0.16533333333333333,
+    0.17422222222222222,
+    0.206
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 130
+  },
+  "uid": "relative_position/sa_31038.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_31038.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the bus?\nOptions:\nA. The color of the bus is white.\nB. The color of the bus is red.\nC. The color of the bus is blue.\nD. The color of the bus is yellow.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_34040.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the bus is white.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the bus is white.",
+  "extra_info": {
+   "question": "What is the color of the bus?",
+   "options": [
+    "The color of the bus is white.",
+    "The color of the bus is red.",
+    "The color of the bus is blue.",
+    "The color of the bus is yellow."
+   ],
+   "gt_bbox": [
+    0.43666666666666665,
+    0.5364444444444444,
+    0.516,
+    0.5608888888888889
+   ],
+   "image_size": [
+    1500,
+    2250
+   ],
+   "index": 44
+  },
+  "uid": "direct_attributes/sa_34040.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_34040.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: Is the drum on the left or right side of the yellow balloon?\nOptions:\nA. The drum is on the left side of the yellow balloon.\nB. The drum is on the right side of the yellow balloon.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/relative_position/sa_7228.jpg"
+  },
+  "data_source": "relative_position",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The drum is on the left side of the yellow balloon.",
+   "style": "model"
+  },
+  "ground_truth": "The drum is on the left side of the yellow balloon.",
+  "extra_info": {
+   "question": "Is the drum on the left or right side of the yellow balloon?",
+   "options": [
+    "The drum is on the left side of the yellow balloon.",
+    "The drum is on the right side of the yellow balloon."
+   ],
+   "gt_bbox": [
+    0.06020362992474546,
+    0.5566666666666666,
+    0.10048694112439133,
+    0.61
+   ],
+   "image_size": [
+    2259,
+    1500
+   ],
+   "index": 179
+  },
+  "uid": "relative_position/sa_7228.jpg",
+  "image": "/root/code/datasets/vstar_bench/relative_position/sa_7228.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the Apple logo?\nOptions:\nA. The color of the Apple logo is polychromatic.\nB. The color of the Apple logo is white.\nC. The color of the Apple logo is silver.\nD. The color of the Apple logo is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_33492.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the Apple logo is polychromatic.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the Apple logo is polychromatic.",
+  "extra_info": {
+   "question": "What is the color of the Apple logo?",
+   "options": [
+    "The color of the Apple logo is polychromatic.",
+    "The color of the Apple logo is white.",
+    "The color of the Apple logo is silver.",
+    "The color of the Apple logo is red."
+   ],
+   "gt_bbox": [
+    0.07644444444444444,
+    0.14533333333333334,
+    0.08488888888888889,
+    0.162
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 42
+  },
+  "uid": "direct_attributes/sa_33492.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_33492.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the paraglider?\nOptions:\nA. The color of the paraglider is blue.\nB. The color of the paraglider is white.\nC. The color of the paraglider is pink.\nD. The color of the paraglider is red.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_10701.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the paraglider is blue.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the paraglider is blue.",
+  "extra_info": {
+   "question": "What is the color of the paraglider?",
+   "options": [
+    "The color of the paraglider is blue.",
+    "The color of the paraglider is white.",
+    "The color of the paraglider is pink.",
+    "The color of the paraglider is red."
+   ],
+   "gt_bbox": [
+    0.764,
+    0.3488888888888889,
+    0.7806666666666666,
+    0.36088888888888887
+   ],
+   "image_size": [
+    1500,
+    2250
+   ],
+   "index": 5
+  },
+  "uid": "direct_attributes/sa_10701.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_10701.jpg"
+ },
+ {
+  "prompt": [
+   {
+    "role": "system",
+    "content": "You are a helpful assistant.\n\n# Tools\nYou may call one or more functions to assist with the user query.\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"crop\", \"description\": \"Crop a region of the image to examine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left corner of the image, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"zoom\", \"description\": \"Zoom into a region to see fine details.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to zoom into as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right.\"}}, \"required\": [\"bbox_2d\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"rotate\", \"description\": \"Rotate the image by a specified angle.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"angle\": {\"type\": \"integer\", \"description\": \"Rotation angle in degrees (e.g., 90, 180, 270). Positive values rotate counter-clockwise.\"}}, \"required\": [\"angle\"]}}}\n{\"type\": \"function\", \"function\": {\"name\": \"ocr\", \"description\": \"Extract text from a region of the image.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"bbox_2d\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"minItems\": 4, \"maxItems\": 4, \"description\": \"The region to read as NORMALIZED [x1, y1, x2, y2]: each value in [0,1], 0,0 = top-left, 1,1 = bottom-right. Omit to OCR the whole image.\"}}, \"required\": []}}}\n</tools>\n\n# How to call a tool\nReturn a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n# Coordinate system (IMPORTANT)\nAll bbox_2d values MUST be NORMALIZED coordinates: each value is a fraction\nof the image size in [0, 1], where (0,0) = top-left corner and (1,1) = bottom-right\ncorner of the image you are currently viewing. Do NOT use pixel values.\nYour coordinates are scaled automatically by the tool executor.\n\n# Answer policy (IMPORTANT)\n1. FIRST, answer directly from the full image: <answer>your answer</answer>\n2. ONLY if you cannot determine the answer from the full image\n   (object too small, text unreadable, details unclear) may you call a tool\n   to inspect. Call ONE tool per turn, inspect the returned image, then answer.\n3. After inspecting tool results, give your final answer in <answer> tags.\n\nTools available:\n<tool_call>\n{\"name\": \"zoom\", \"arguments\": {\"bbox_2d\": [0.15, 0.25, 0.28, 0.38]}}\n</tool_call>\nUse ocr to read text, rotate only if the image orientation is wrong.\n\nWhen you have enough evidence, provide your answer inside <answer> tags:\n<answer>your answer</answer>"
+   },
+   {
+    "role": "user",
+    "content": "<image>\nQuestion: What is the color of the water bottle?\nOptions:\nA. The color of the water bottle is red.\nB. The color of the water bottle is blue.\nC. The color of the water bottle is white.\nD. The color of the water bottle is black.\n\nAnswer directly from the full image with the correct option letter in <answer> tags. Use a tool only if you cannot determine the answer from the full image."
+   }
+  ],
+  "mm_hint": {
+   "hint_type": "image",
+   "hint_path": "/root/code/datasets/vstar_bench/direct_attributes/sa_5674.jpg"
+  },
+  "data_source": "direct_attributes",
+  "env_name": "vstar_tool_env",
+  "reward_model": {
+   "ground_truth": "The color of the water bottle is red.",
+   "style": "model"
+  },
+  "ground_truth": "The color of the water bottle is red.",
+  "extra_info": {
+   "question": "What is the color of the water bottle?",
+   "options": [
+    "The color of the water bottle is red.",
+    "The color of the water bottle is blue.",
+    "The color of the water bottle is white.",
+    "The color of the water bottle is black."
+   ],
+   "gt_bbox": [
+    0.01911111111111111,
+    0.42133333333333334,
+    0.030666666666666665,
+    0.4666666666666667
+   ],
+   "image_size": [
+    2250,
+    1500
+   ],
+   "index": 78
+  },
+  "uid": "direct_attributes/sa_5674.jpg",
+  "image": "/root/code/datasets/vstar_bench/direct_attributes/sa_5674.jpg"
+ }
+]

@@ -17,7 +17,9 @@ data:
   image_key: image
   video_key: videos
   mm_hint_key: mm_hint
-  with_mm_hint: True 
+  with_mm_hint: True
+  min_pixels: null
+  max_pixels: null
   custom_cls:
       path: null
       name: null
@@ -195,11 +197,16 @@ reward_model:
   ulysses_sequence_parallel_size: 1 # sp size
   use_dynamic_bsz: ${critic.use_dynamic_bsz}
   forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
-  reward_manager: naive
+  reward_manager: atr
+  reward_kwargs:
+    atr_config_dict:
+      lambda_u: 1.0
+      gamma_c: 0.5
+      eta_s: 0.3
 
 custom_reward_function:
-  path: null
-  name: compute_score
+  path: /root/code/atr/adapter/score.py
+  name: compute_vstar_score
 
 algorithm:
   gamma: 1.0
@@ -217,6 +224,7 @@ algorithm:
     enable: False # We try to avoid forgetting to set enable
     metric: null # acc / score / seq_reward / seq_final_reward / has_image / traj_length
     max_num_gen_batches: 0 # Non-positive values mean no upper limit
+    std_sort_enable: False
 
 trainer:
   balance_batch: True

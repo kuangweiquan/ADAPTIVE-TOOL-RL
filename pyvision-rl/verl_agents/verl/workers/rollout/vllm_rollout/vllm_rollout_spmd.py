@@ -111,7 +111,12 @@ class vLLMRollout(BaseRollout):
             else:
                 vllm_ps.initialize_model_parallel(tensor_model_parallel_size=tensor_parallel_size)
 
-        assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, (
+        # Qwen3-VL DeepStack: max_position_embeddings lives in text_config (nested)
+        mpe = getattr(model_hf_config, "text_config", None)
+        max_position_embeddings = getattr(mpe, "max_position_embeddings", None)
+        if max_position_embeddings is None:
+            max_position_embeddings = model_hf_config.max_position_embeddings
+        assert max_position_embeddings >= config.prompt_length + config.response_length, (
             "model context length should be greater than total sequence length"
         )
 
@@ -152,7 +157,13 @@ class vLLMRollout(BaseRollout):
             enable_prefix_caching=True,
             trust_remote_code=trust_remote_code,
             seed=config.get("seed", 0),
-            
+            # 2x24G: encoder cache profiling allocates a huge dummy buffer
+            # (encoder_budget x hidden) that OOMs alongside FSDP weights
+            skip_mm_profiling=True,
+            # 2x24G: sampler warmup with 256 dummy requests OOMs when FSDP
+            # actor shares the same GPU; smoke needs at most 4 concurrent seqs
+            max_num_seqs=32,
+
             **({
                 "limit_mm_per_prompt": dict(
                     image=self.config.agent.max_vllm_images, 
@@ -162,7 +173,14 @@ class vLLMRollout(BaseRollout):
         )
 
         # Offload vllm model to reduce peak memory usage
+        free_before, _ = torch.cuda.mem_get_info()
         self.inference_engine.sleep(level=1)
+        free_after, total = torch.cuda.mem_get_info()
+        print(
+            f"[DIAG] sleep: free {free_before/1e9:.2f}G -> {free_after/1e9:.2f}G "
+            f"(freed {(free_after-free_before)/1e9:.2f}G)",
+            flush=True,
+        )
 
         kwargs = dict(
             n=1,

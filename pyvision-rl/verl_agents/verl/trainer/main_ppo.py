@@ -175,6 +175,10 @@ class TaskRunner:
             from verl.workers.reward_manager import DAPORewardManager
 
             reward_manager_cls = DAPORewardManager
+        elif reward_manager_name == "atr":
+            from atr.adapter.patch_reward import ATRRewardManager
+
+            reward_manager_cls = ATRRewardManager
         else:
             raise NotImplementedError
 

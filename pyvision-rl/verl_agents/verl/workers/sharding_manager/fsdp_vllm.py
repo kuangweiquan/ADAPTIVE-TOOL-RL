@@ -85,9 +85,19 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         # pytorch: https://pytorch.org/docs/stable/notes/cuda.html#memory-management
         # vllm: https://github.com/vllm-project/vllm/blob/v0.7.3/vllm/device_allocator/cumem.py#L103
         torch.cuda.empty_cache()
+        print(f"[DIAG] enter sm: allocated={torch.cuda.memory_allocated()/1e9:.2f}G reserved={torch.cuda.memory_reserved()/1e9:.2f}G", flush=True)
 
         log_gpu_memory_usage("Before state_dict() in sharding manager memory", logger=logger)
         params = self.module.state_dict()
+        # 2x24G: state_dict ran while the vLLM engine was still asleep (GPU
+        # free). Stash the copy on CPU now so wake_up's memory-pool remap
+        # (weights + KV ~9.5G) doesn't race with the 8.8G shard copy;
+        # update_params pulls each param back to GPU layer by layer.
+        params = {k: v.to("cpu") for k, v in params.items()}
+        # 2x24G: state_dict() unshards ALL params (17.5G peak); those cached
+        # blocks stay in the torch allocator and would starve wake_up below
+        torch.cuda.empty_cache()
+        print(f"[DIAG] after state_dict: allocated={torch.cuda.memory_allocated()/1e9:.2f}G reserved={torch.cuda.memory_reserved()/1e9:.2f}G", flush=True)
         log_gpu_memory_usage("After state_dict() in sharding manager memory", logger=logger)
         # Copy, not share memory
         load_format = "hf" if self.full_params else "dtensor"
@@ -100,6 +110,17 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             log_gpu_memory_usage("After sync model weights in sharding manager", logger=logger)
             del params
         else:
+            free_mem, total_mem = torch.cuda.mem_get_info()
+            print(
+                f"[DIAG] before wake: free={free_mem/1e9:.2f}G total={total_mem/1e9:.2f}G",
+                flush=True,
+            )
+            try:
+                alloc = self.inference_engine.llm_engine.model_executor.driver_worker.worker.device_allocator
+                segs = [(t.tag, h[1] / 1e9) for t, h in alloc.pointer_to_data.items()]
+                print(f"[DIAG] cumem segments: {segs}", flush=True)
+            except Exception as e:
+                print(f"[DIAG] no allocator access: {e}", flush=True)
             if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
                 self.inference_engine.wake_up(tags=["weights"])
             else:
@@ -136,7 +157,14 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         ):
             self.inference_engine.offload_model_weights()
         else:
+            free_before, _ = torch.cuda.mem_get_info()
             self.inference_engine.sleep(level=1)
+            free_after, _ = torch.cuda.mem_get_info()
+            print(
+                f"[DIAG] __exit__ sleep: free {free_before/1e9:.2f}G -> {free_after/1e9:.2f}G "
+                f"(freed {(free_after-free_before)/1e9:.2f}G)",
+                flush=True,
+            )
 
         # self.module.to('cuda')
         # if torch.distributed.get_rank() == 0:
@@ -198,7 +226,12 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 ),
             )
         else:
+            # 2x24G: state_dict was gathered from the CPU-shard (params offloaded);
+            # move the local shard back to GPU before full_tensor()/load_weights
             loaded_params = model.load_weights(
-                ((name, param.full_tensor() if world_size != 1 else param) for name, param in updated_params.items())
+                (
+                    (name, param.to("cuda").full_tensor() if world_size != 1 else param)
+                    for name, param in updated_params.items()
+                )
             )
         logger.info(f"vLLM load weights, loaded_params: {len(loaded_params)}")

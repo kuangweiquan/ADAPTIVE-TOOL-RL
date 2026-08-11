@@ -218,7 +218,7 @@ class ActorRolloutRefWorker(Worker):
                 pretrained_model_name_or_path=local_path,
                 torch_dtype=torch_dtype,
                 config=actor_model_config,
-                attn_implementation="flash_attention_2",
+                attn_implementation="sdpa",
                 trust_remote_code=trust_remote_code,
             )
 
@@ -374,6 +374,9 @@ class ActorRolloutRefWorker(Worker):
             from verl.workers.sharding_manager import FSDPVLLMShardingManager
 
             log_gpu_memory_usage(f"Before building {rollout_name} rollout", logger=None)
+            # Release FSDP init-time reserved memory before vLLM engine startup
+            # (2x24G card: FSDP load reserves up to ~14G, vLLM then sees too little free)
+            torch.cuda.empty_cache()
             local_path = copy_to_local(self.config.model.path)
             if vllm_mode == "customized":
                 rollout = vLLMRollout(
@@ -521,6 +524,10 @@ class ActorRolloutRefWorker(Worker):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def update_actor(self, data: DataProto):
+        # 2x24G: release blocks left over from the log_prob/ref phase so the
+        # FSDP param/optimizer load below can reuse physical pages instead of
+        # growing the process footprint into the vLLM-reserved region
+        torch.cuda.empty_cache()
         # Support all hardwares
         data = data.to(torch.cuda.current_device())
 
@@ -580,6 +587,9 @@ class ActorRolloutRefWorker(Worker):
             else self.tokenizer.pad_token_id,
         }
         prompts.meta_info.update(meta_info)
+        # 2x24G: release FSDP cached blocks before wake_up so the vLLM
+        # memory pool can re-map its full budget (weights + KV cache)
+        torch.cuda.empty_cache()
         with self.rollout_sharding_manager:
             # after parameters sync with rollout, offload actor model to CPU
             if self._is_offload_param:
@@ -795,7 +805,7 @@ class CriticWorker(Worker):
                 pretrained_model_name_or_path=local_path,
                 torch_dtype=torch_dtype,
                 config=critic_model_config,
-                attn_implementation="flash_attention_2",
+                attn_implementation="sdpa",
                 trust_remote_code=trust_remote_code,
             )
 
@@ -1078,7 +1088,7 @@ class RewardModelWorker(Worker):
                 pretrained_model_name_or_path=local_path,
                 config=model_config,
                 torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
+                attn_implementation="sdpa",
                 trust_remote_code=trust_remote_code,
             )
 

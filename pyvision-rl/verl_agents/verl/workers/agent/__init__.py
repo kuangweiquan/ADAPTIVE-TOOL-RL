@@ -25,3 +25,9 @@ except Exception as err:
     print(f' [ERROR] Failed to register FrozenLakeTool : {err=}')
 
 from .parallel_env import agent_rollout_loop
+
+# VStar RL: register VStarToolEnv so agent rollout workers can find it
+try:
+    from atr.adapter.vstar_env import VStarToolEnv  # noqa: F401
+except Exception as err:
+    print(f' [ERROR] Failed to register VStarToolEnv : {err=}')
