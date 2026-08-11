@@ -78,7 +78,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
     source_ratios = {k: v / total_data_source for k, v in data_source_counts.items()}
 
     # ability distribution computation
-    data_ability_list = batch.non_tensor_batch["ability"]
+    data_ability_list = batch.non_tensor_batch.get("ability", [])
 
     data_ability_counts = Counter(data_ability_list)
     total_data_ability = len(data_ability_list)

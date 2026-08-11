@@ -1810,6 +1810,8 @@ class RayPPOTrainer:
         print(f"################## dataloader length: {dataloader_len}")
 
         num_epoch = 0
+        # filter_groups.enable=False 时 step 末的 metrics 仍引用该变量，先给默认值
+        extra_filtering_config = None
 
         for epoch in range(self.config.trainer.total_epochs):
             dataloader_iter = iter(self.train_dataloader)

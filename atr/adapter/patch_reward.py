@@ -199,6 +199,11 @@ class ATRRewardManager:
             # — Collect extra info —
             for key, value in components.items():
                 reward_extra_info[key].append(value)
+            # naive.py 原版会把 score dict 全部键写入 extra_info；
+            # val 路径（ray_trainer._validate）硬读 is_answer_right / acc_score，缺键即 KeyError
+            reward_extra_info['is_answer_right'].append(bool(accuracy))
+            reward_extra_info['acc_score'].append(components['accuracy_raw'])
+            reward_extra_info['ability'].append(extra_info.get('ability', 'unknown') if isinstance(extra_info, dict) else 'unknown')
             reward_extra_info['ground_truth'].append(ground_truth)
             reward_extra_info['data_source'].append(data_source)
             reward_extra_info['uid'].append(uid)

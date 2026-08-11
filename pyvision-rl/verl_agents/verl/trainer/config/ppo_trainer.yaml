@@ -124,6 +124,7 @@ actor_rollout_ref:
       temperature: 0
       n: 1
       do_sample: False # default eager for validation
+      max_turn_in_val: 2 # agent max turns during validation (ray_trainer reads this; missing key -> ConfigAttributeError)
     agent:
       activate_agent: False
       single_response_max_tokens: 32768

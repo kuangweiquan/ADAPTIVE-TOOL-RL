@@ -24,6 +24,7 @@ import torch
 from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+import torch.distributed.nn  # autograd-aware all_gather for chunked lm_head
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
@@ -156,44 +157,60 @@ class DataParallelPPOActor(BasePPOActor):
                             # shard broadcasts it (backward credits only
                             # that rank). Fallback: variable-size all_gather
                             # if the shard boundary splits the vocab.
-                            local = lm_head_module.weight.view(-1, x.shape[-1])
+                            # FSDP1 把 lm_head 与 embed_tokens 等参数 flatten 进
+                            # 同一个外层 flat（wrap_policy 只包 transformer
+                            # layers），rank 本地视图是 1D 元素碎片，shard
+                            # 边界会切在"行中间"，无法 view 成 [rows, hidden]。
+                            # 改为 dist.nn.all_gather（autograd-aware，backward
+                            # 梯度按位置 scatter 回各 rank 的 shard）取全量
+                            # flat，再按 _shard_param_infos 的 (offset, numel)
+                            # 顺序把 lm_head 片段拼成完整 [vocab, hidden] 权重。
+                            flat = self.actor_module._flat_param
+                            target = None
+                            for i, info in enumerate(flat._param_infos):
+                                if info.module is lm_head_module:
+                                    target = i
+                                    break
+                            if target is None:
+                                raise RuntimeError("[CHUNK] lm_head not found in FSDP flat params")
+                            si = flat._shard_param_infos[target]
                             world = torch.distributed.get_world_size()
                             if world == 1:
-                                w = local
+                                w = lm_head_module.weight.view(-1, x.shape[-1])
                             else:
-                                k = torch.tensor(local.shape[0], device=x.device, dtype=torch.long)
-                                sizes = [
-                                    torch.empty(1, dtype=torch.long, device=x.device) for _ in range(world)
+                                local = flat._local_shard.data.to(x.device)
+                                local_numel = local.numel()
+                                meta = torch.tensor(
+                                    [
+                                        int(si.in_shard),
+                                        int(si.offset_in_shard or 0),
+                                        int(si.numel_in_shard or 0),
+                                    ],
+                                    dtype=torch.long,
+                                    device=x.device,
+                                )
+                                metas = [
+                                    torch.empty(3, dtype=torch.long, device=x.device)
+                                    for _ in range(world)
                                 ]
-                                torch.distributed.all_gather(sizes, k)  # row counts only (tiny)
-                                total_rows = sum(int(s.item()) for s in sizes)
-                                full_ranks = [i for i, s in enumerate(sizes) if int(s.item()) == total_rows]
+                                torch.distributed.all_gather(metas, meta)  # tiny, non-autograd
+                                full = torch.distributed.nn.all_gather(local)  # autograd-aware
+                                full = torch.cat(full)
                                 free_mem, _ = torch.cuda.mem_get_info()
                                 print(
-                                    f"[CHUNK] local={tuple(local.shape)} rows={[int(s.item()) for s in sizes]} "
+                                    f"[CHUNK] local_numel={local_numel} pieces="
+                                    f"{[(int(m[0]), int(m[1]), int(m[2])) for m in metas]} "
                                     f"free={free_mem/1e9:.2f}G",
                                     flush=True,
                                 )
-                                if full_ranks:
-                                    src = full_ranks[0]
-                                    if int(k.item()) == total_rows:
-                                        w = local
-                                        torch.distributed.broadcast(w, src=src)
-                                    else:
-                                        w = torch.empty(
-                                            total_rows, x.shape[-1], dtype=local.dtype, device=x.device
-                                        )
-                                        torch.distributed.broadcast(w, src=src)
-                                else:
-                                    # split shard: gather row ranges and splice
-                                    max_k = max(int(s.item()) for s in sizes)
-                                    padded = torch.zeros(max_k, x.shape[-1], dtype=local.dtype, device=x.device)
-                                    padded[: local.shape[0]] = local
-                                    gathered = [torch.empty_like(padded) for _ in range(world)]
-                                    torch.distributed.all_gather(gathered, padded)
-                                    w = torch.cat(
-                                        [g[: int(s.item())] for g, s in zip(gathered, sizes)], dim=0
-                                    )
+                                parts = [
+                                    full[r * local_numel + int(metas[r][1]) :
+                                         r * local_numel + int(metas[r][1]) + int(metas[r][2])]
+                                    for r in range(world)
+                                    if int(metas[r][0]) and int(metas[r][2]) > 0
+                                ]
+                                w = torch.cat(parts)
+                                w = w.view(w.numel() // x.shape[-1], x.shape[-1])
                             return logprobs_from_hidden(
                                 hidden=x,
                                 lm_head_weight=w,
