@@ -52,8 +52,18 @@ def logprobs_from_hidden(
     labels: torch.Tensor,
     temperature: float = 1.0,
     chunk: int = 4096,
+    weight_gather_fn=None,
+    vocab_size=None,
 ) -> torch.Tensor:
     """Memory-bounded lm_head + log-softmax, chunked over the vocab.
+
+    `weight_gather_fn(vocab_start, vocab_end) -> (rows, hidden)` is an
+    optional per-chunk weight provider (e.g. FSDP shard assembly via
+    chunk-sized all_gather) that avoids materializing the full lm_head
+    weight (~2.8G all_gather target) alongside the activation/hidden
+    buffers; without it the full `lm_head_weight` is sliced directly.
+    With `weight_gather_fn`, pass `vocab_size` explicitly (lm_head_weight
+    is None in that mode).
 
     Computes log_softmax one vocab chunk at a time instead of materializing
     the full (nnz, vocab) logits; the backward pass likewise only creates a
@@ -66,7 +76,7 @@ def logprobs_from_hidden(
     original logits.div_(temperature) path.
     """
     assert hidden.dim() == 2 and labels.dim() == 1, (hidden.shape, labels.shape)
-    vocab = lm_head_weight.shape[0]
+    vocab = vocab_size if vocab_size is not None else lm_head_weight.shape[0]
     n = hidden.shape[0]
     device = hidden.device
     if vocab == 0:
@@ -81,7 +91,12 @@ def logprobs_from_hidden(
     lse = None
     for start in range(0, vocab, chunk):
         end = min(start + chunk, vocab)
-        w_chunk = lm_head_weight[start:end]  # (chunk, hidden) bf16
+        if weight_gather_fn is not None:
+            # FSDP shard assembly: per-chunk gather keeps the all_gather
+            # target at O(chunk x hidden) instead of the full vocab rows
+            w_chunk = weight_gather_fn(start, end)  # (chunk, hidden) bf16
+        else:
+            w_chunk = lm_head_weight[start:end]  # (chunk, hidden) bf16
         logits_chunk = (hidden @ w_chunk.T).float()  # (nnz, chunk) -> fp32
         logits_chunk.div_(temperature)
         lse_chunk = torch.logsumexp(logits_chunk, dim=-1)  # (nnz,)
@@ -156,11 +171,35 @@ def clip_by_value(x, tensor_min, tensor_max):
     return clipped
 
 
-def entropy_from_logits(logits: torch.Tensor):
-    """Calculate entropy from logits."""
-    pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
-    return entropy
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 16384):
+    """Calculate entropy from logits, chunked over the vocab dim.
+
+    Entropy = logsumexp(logits) - sum(pd * logits), pd = softmax(logits).
+    The naive version materializes ~4.5x logits in intermediates (softmax +
+    logsumexp exp), which overflows on 4x3090 when the micro batch is a
+    single long sample (5120+ tokens prompt -> ~8k nnz -> 5.5 GiB peak).
+    Chunking bounds the extra memory to O(nnz * chunk_size); fp32 chunk
+    arithmetic is also more stable than bf16 logsumexp.
+    """
+    nnz = logits.shape[:-1]
+    device = logits.device
+    # global max for numerical stability (cheap: reduces along vocab)
+    max_val = logits.max(dim=-1, keepdim=True).values  # (nnz, 1)
+    # pass 1: sum exp(logits - max) per chunk -> logsumexp
+    sum_exp = torch.zeros(nnz, dtype=torch.float32, device=device)
+    for start in range(0, logits.size(-1), chunk_size):
+        end = min(start + chunk_size, logits.size(-1))
+        chunk = logits[..., start:end].float()  # (nnz, chunk) fp32
+        sum_exp = sum_exp + (chunk - max_val).exp().sum(dim=-1)
+    lse = max_val.squeeze(-1).float() + sum_exp.log()
+    # pass 2: sum(pd * logits) = sum(exp(x - max) * x) / sum_exp
+    acc = torch.zeros(nnz, dtype=torch.float32, device=device)
+    for start in range(0, logits.size(-1), chunk_size):
+        end = min(start + chunk_size, logits.size(-1))
+        chunk = logits[..., start:end].float()
+        exp_chunk = (chunk - max_val).exp()  # (nnz, chunk)
+        acc = acc + (exp_chunk * chunk).sum(dim=-1)
+    return lse - acc / sum_exp.clamp_min(1e-12)
 
 
 def masked_sum(values, mask, axis=None):

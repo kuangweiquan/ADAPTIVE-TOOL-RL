@@ -153,18 +153,17 @@ class DataParallelPPOActor(BasePPOActor):
                             # hold zero rows of the vocab (flat-param
                             # boundary). The full weight must be identical
                             # on every rank for the DP-parallel log_probs.
-                            # Cheap path: the rank that owns the whole
-                            # shard broadcasts it (backward credits only
-                            # that rank). Fallback: variable-size all_gather
-                            # if the shard boundary splits the vocab.
-                            # FSDP1 把 lm_head 与 embed_tokens 等参数 flatten 进
-                            # 同一个外层 flat（wrap_policy 只包 transformer
-                            # layers），rank 本地视图是 1D 元素碎片，shard
-                            # 边界会切在"行中间"，无法 view 成 [rows, hidden]。
-                            # 改为 dist.nn.all_gather（autograd-aware，backward
-                            # 梯度按位置 scatter 回各 rank 的 shard）取全量
-                            # flat，再按 _shard_param_infos 的 (offset, numel)
-                            # 顺序把 lm_head 片段拼成完整 [vocab, hidden] 权重。
+                            # FSDP1 flattens lm_head with embed_tokens etc.
+                            # into one outer flat; the rank-local view is a
+                            # 1D element slice whose boundary can split a
+                            # row. Assembling the whole weight at once
+                            # (all_gather of the full flat, ~2.8G on 4x3090)
+                            # OOMs in the train segment, so we assemble it
+                            # per-vocab-chunk: each rank contributes the rows
+                            # it owns (zero-filled), all_gather moves only
+                            # O(chunk x hidden) per call, and each row is
+                            # summed to full value (split rows complete each
+                            # other since only the owner rank is nonzero).
                             flat = self.actor_module._flat_param
                             target = None
                             for i, info in enumerate(flat._param_infos):
@@ -174,48 +173,70 @@ class DataParallelPPOActor(BasePPOActor):
                             if target is None:
                                 raise RuntimeError("[CHUNK] lm_head not found in FSDP flat params")
                             si = flat._shard_param_infos[target]
+                            hidden_dim = x.shape[-1]
                             world = torch.distributed.get_world_size()
                             if world == 1:
-                                w = lm_head_module.weight.view(-1, x.shape[-1])
+                                w = lm_head_module.weight.view(-1, hidden_dim)
+                                return logprobs_from_hidden(
+                                    hidden=x,
+                                    lm_head_weight=w,
+                                    labels=lm_head_module._vstar_labels,
+                                    temperature=lm_head_module._vstar_temp,
+                                )
+                            # NOTE: keep the autograd link (no `.data`): the
+                            # chunk gather must credit gradients back to the
+                            # FSDP flat shard, or lm_head never updates.
+                            local = flat._local_shard.to(x.device)
+                            in_shard = int(si.in_shard)
+                            off = int(si.offset_in_shard or 0)
+                            numel = int(si.numel_in_shard or 0)
+                            meta = torch.tensor([in_shard, off, numel], dtype=torch.long, device=x.device)
+                            metas = [torch.empty(3, dtype=torch.long, device=x.device) for _ in range(world)]
+                            torch.distributed.all_gather(metas, meta)  # tiny, non-autograd
+                            total_numel = sum(int(m[2]) for m in metas if int(m[0]))
+                            vocab_size = total_numel // hidden_dim
+                            print(
+                                f"[CHUNK] pieces={[(int(m[0]), int(m[1]), int(m[2])) for m in metas]} "
+                                f"vocab={vocab_size}",
+                                flush=True,
+                            )
+                            # Row-tensor of the local element slice (edge rows
+                            # zero-filled) plus their global row ids.
+                            if in_shard and numel > 0:
+                                g0 = off // hidden_dim
+                                g1 = (off + numel - 1) // hidden_dim + 1
+                                n_rows = g1 - g0
+                                row_tensor = torch.zeros(n_rows, hidden_dim, dtype=local.dtype, device=x.device)
+                                elem_s = max(off, g0 * hidden_dim)
+                                elem_e = min(off + numel, g1 * hidden_dim)
+                                if elem_s < elem_e:
+                                    dst_s = elem_s - g0 * hidden_dim
+                                    row_tensor.view(-1)[dst_s : dst_s + (elem_e - elem_s)] = local[
+                                        elem_s - off : elem_e - off
+                                    ]
+                                g_idx = torch.arange(g0, g1, device=x.device)
                             else:
-                                local = flat._local_shard.data.to(x.device)
-                                local_numel = local.numel()
-                                meta = torch.tensor(
-                                    [
-                                        int(si.in_shard),
-                                        int(si.offset_in_shard or 0),
-                                        int(si.numel_in_shard or 0),
-                                    ],
-                                    dtype=torch.long,
-                                    device=x.device,
+                                row_tensor = None
+                                g_idx = None
+
+                            def gather_chunk(start, end):
+                                contrib = torch.zeros(
+                                    end - start, hidden_dim, dtype=local.dtype, device=x.device
                                 )
-                                metas = [
-                                    torch.empty(3, dtype=torch.long, device=x.device)
-                                    for _ in range(world)
-                                ]
-                                torch.distributed.all_gather(metas, meta)  # tiny, non-autograd
-                                full = torch.distributed.nn.all_gather(local)  # autograd-aware
-                                full = torch.cat(full)
-                                free_mem, _ = torch.cuda.mem_get_info()
-                                print(
-                                    f"[CHUNK] local_numel={local_numel} pieces="
-                                    f"{[(int(m[0]), int(m[1]), int(m[2])) for m in metas]} "
-                                    f"free={free_mem/1e9:.2f}G",
-                                    flush=True,
-                                )
-                                parts = [
-                                    full[r * local_numel + int(metas[r][1]) :
-                                         r * local_numel + int(metas[r][1]) + int(metas[r][2])]
-                                    for r in range(world)
-                                    if int(metas[r][0]) and int(metas[r][2]) > 0
-                                ]
-                                w = torch.cat(parts)
-                                w = w.view(w.numel() // x.shape[-1], x.shape[-1])
+                                if row_tensor is not None:
+                                    mask = (g_idx >= start) & (g_idx < end)
+                                    if mask.any():
+                                        contrib[g_idx[mask] - start] = row_tensor[mask]
+                                gathered = torch.distributed.nn.all_gather(contrib)  # autograd-aware
+                                return torch.stack(gathered).sum(dim=0)  # each row owned by 1 rank
+
                             return logprobs_from_hidden(
                                 hidden=x,
-                                lm_head_weight=w,
+                                lm_head_weight=None,
                                 labels=lm_head_module._vstar_labels,
                                 temperature=lm_head_module._vstar_temp,
+                                weight_gather_fn=gather_chunk,
+                                vocab_size=vocab_size,
                             )
 
                         lm_head_module.forward = _vstar_chunked_forward

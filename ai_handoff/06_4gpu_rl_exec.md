@@ -63,3 +63,37 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
 - 不删改本地需要的源码（本仓库代码是唯一真值）
 - 不把 checkpoint/大文件推 git
 - 不在未验证冒烟四项前直接跑全量
+
+## 回报 2（2026-08-11 第 7 次启动前，远端）
+
+**状态：代码侧 OOM 修复链全部完成并 CPU 验证通过；训练启动受阻于实例 GPU 状态（见下）。**
+
+### 本轮 4 项修复（解决训练段最后两个 OOM）
+1. **entropy 分块版**（`pyvision-rl/verl_agents/verl/utils/torch_functional.py`）：
+   `entropy_from_logits` 按 vocab chunk=16384 两趟计算（sum_exp + sum(pd·logits)），
+   峰值 5.55G → ~200M。maxdiff 1.16e-4（bf16 精度内）。
+2. **lm_head chunk 级权重收集**（`dp_actor.py` `_vstar_chunked_forward` 重写）：
+   不再全量 all_gather（2.82G 分配目标，free 1.4G 时 OOM）；每 rank 只提取自己
+   持有的行（`_shard_param_infos` 的 off/numel，0 填充被 shard 切开的行），
+   `gather_chunk(start,end)` 每次只 all_gather O(chunk×hidden)≈134M，行由唯一
+   owner 非零贡献、sum 合并（跨 rank 分裂的行互相补全）。
+3. **权重梯度回传修复**：原 `flat._local_shard.data` 的 `.data` 切断 autograd 图
+   → lm_head 权重永不更新；去掉 `.data` 后梯度经 copy/all_gather 回传 FSDP flat shard。
+4. **`logprobs_from_hidden` 钩子**：新增 `weight_gather_fn` + `vocab_size` 参数
+   （weight_gather_fn 模式下 lm_head_weight=None，vocab 由调用方传入）。
+
+### CPU 验证（/tmp/verify_chunk.py，conda atr 环境，全部通过）
+- chunk 合并权重 == 全量权重（含跨 rank 分裂行）✓
+- weight_gather_fn 路径与原版 logprobs maxdiff = 0 ✓
+- backward 梯度回传 x 与两个 local shard（全覆盖、无越界）✓
+- 两个文件 py_compile 通过 ✓
+
+### 阻塞：实例 GPU 不可用（用户需处理）
+- 实例于 18:43 重启（PID1 均为 18:43），`/dev/nvidia0-3` 缺失（已 mknod 仍无效）、
+  `/proc/driver/nvidia/gpus/` 不存在、`nvidia-smi` → "No devices were found"、
+  `torch.cuda.is_available()=False`。驱动版本可读（NVRM 570.124.04）但无 GPU 绑定。
+- 判断：AutoDL 控制台侧未分配 GPU（无卡模式开机/重启未挂 GPU）。容器内无法修复。
+- **需要用户**：AutoDL 控制台确认实例 GPU 模式，必要时重启实例；GPU 恢复后
+  直接跑 `setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &`，
+  10 秒级轮询 `grep -E "\[CHUNK\]|pg_loss|\[ATR\] acc|OutOfMemory" logs/qwen3vl_8b_sftv2_grpo_4gpu.log`
+  等 STEP1_DONE（actor/pg_loss + [ATR] acc）。
