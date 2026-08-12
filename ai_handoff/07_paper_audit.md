@@ -76,3 +76,45 @@ grep -c -E "\[Zoomed into|\[OCR result:" logs/vstar_smoke.log
 
 - 跑全量前必须先回报 Step 0；不擅自降级数据/换起点
 - checkpoint/日志/images.zip 不进 git；回报写本文件回报节 + commit `[remote] ...`
+
+---
+
+## 远端回报 — Step 0 诊断（2026-08-12）
+
+> 日志：`logs/vstar_smoke.log`（Aug 11 11:55，**唯一成功的冒烟**；`vstar_smoke_1gpu.log` 是 vLLM 显存不足失败，`qwen3vl_8b_sftv2_grpo_4gpu.log` 是 4 卡全量 RayTaskError 失败，均无指标行）。冒烟配置：SFT v2 权重 + `max_turns=2, n=2, train_batch_size=4`（= 8 条 rollout，全部 direct_attributes）。
+
+### 4 条命令原始输出
+
+```bash
+# 1. [ATR] 奖励分布 → 0 行（空）
+# 原因：patch_reward.py:212 打印受 step_cnt < num_examine 门控、base_reward.py:171 受 verbose 门控，
+# 冒烟未开。但奖励确实算了：critic/rewards/mean_reward_of_this_batch:0.387 (max 0.6 / min 0.3)
+
+# 2. 工具调用指标（关键）：
+agent/tool_call_mean:1.000  tool_call_max:1.000  tool_call_min:1.000  tool_call_zero_ratio:0.000
+data_source_tool/direct_attributes/tool_call_mean:1.000  tool_call_zero_ratio:0.000
+
+# 3. "43 tok" 出处（[CHUNK] 是显存日志，与 token 无关）：
+# [CHUNK] local_numel=352396384 pieces=[(0,0,0),(0,0,0),(1,82462912,269933472),(1,0,352396384)] free=6.92G
+# 真实来源 = verl 指标行：
+response_length/mean:43.750  response_length/max:45.000  response_length/min:43.000
+data_source_response_length/direct_attributes/response_length_mean:43.750
+
+# 4. [Zoomed into / [OCR result: 计数 → 0（无信息量）
+# 这两个串是 ToolResult.observation 文本（image_tools.py:96/188），进 prompt 不打印日志，
+# grep 不到 ≠ 没发生 zoom。日志无 response 文本/工具名分布，无法从日志区分调的是 zoom 还是 bbox_2d。
+```
+
+### 问答
+
+- **「43 tok」是 8 条 rollouts 的平均响应长度吗？** → **是**。`response_length/mean=43.750`（min 43 / max 45，8 条），且与 `perf/total_num_tokens:36319` 精确吻合：36319 ≈ 8×(prompt 3618.5 + obs 877.6 + resp 43.75)=36320。确认为**每条 rollout 完整响应的总 token 数**（不是最后一块、不是单轮均值）。`[CHUNK]` 行是 FSDP 显存分块日志，Step 0 文档里"grep CHUNK 确认 43 tok"的前提不成立。
+- **调用了工具的有几条？** → **8/8（100%）**。`tool_call_mean=1.000`、`tool_call_zero_ratio=0.000`，且全部 `end_reason=EXCEED_MAX_TURNS`（max_turns=2 用满）。
+
+### 解读（对决策树的影响）
+
+1. **不落入「工具调用率≈0 → 直接作答」失效分支**：模型 100% 调工具，ParaVT skip-tool shortcut 不成立。冒烟起点是 **SFT v2 先答后验版**（非强制工具版），在 RL 环境下仍 100% 调工具。
+2. **但 acc=0（8/8 全错）**：`critic/acc/acc_of_this_batch:0.000`，reward 0.3~0.6 由 U/C/S 项撑起。43 tok ≈ 单轮一次紧凑工具调用 XML 的长度（agent 检测到调用即截断本轮），每条 rollout 总共只生成 ~43 tok 即到 max_turns 上限——**2 轮内只够一次调用，没有继续推理/作答的空间**。工具会用但没用对（可能是 max_turns=2 过短，zoom→bbox 链至少要 2 轮）。
+3. 按决策树 → **Track A 分支（工具调用率 ≥30% 命中）**，但带两个文档未预见的新信号：acc=0 + 每轮仅 43 tok 一次调用。建议保留 50 步止损，另确认 max_turns 是否应放宽。
+4. 遗留未知：调用的具体工具名（zoom vs bbox_2d）日志无粒度；[ATR] U/C/S 分解未打印。若要该数据，下次冒烟开 `num_examine` / `verbose` 即可。
+
+**待本地决策：是否按 Track A 跑全量（加 50 步止损），以及 max_turns 是否调整。未获确认前不启动全量。**
