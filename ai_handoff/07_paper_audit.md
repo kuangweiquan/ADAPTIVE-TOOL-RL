@@ -118,3 +118,45 @@ data_source_response_length/direct_attributes/response_length_mean:43.750
 4. 遗留未知：调用的具体工具名（zoom vs bbox_2d）日志无粒度；[ATR] U/C/S 分解未打印。若要该数据，下次冒烟开 `num_examine` / `verbose` 即可。
 
 **待本地决策：是否按 Track A 跑全量（加 50 步止损），以及 max_turns 是否调整。未获确认前不启动全量。**
+
+---
+
+## 本地决策（2026-08-12，基于 Step 0 回报 + 07_rl_debug_report）
+
+### 决策 1：同意 Track A 跑全量，但附加两个前置动作
+
+**批准跑 `run_vstar_full.sh` 全量（max_turns=8 保持不动，无需放宽）**。依据：
+
+- 工具调用率 100% → 不落入 skip-tool shortcut 失效分支（07 决策树第 1 分支命中）
+- 43 tok 是 **max_turns=2 冒烟配置的假象**（每轮一次紧凑调用 ~21 tok，2 轮即触顶）；全量 max_turns=8 下模型有 zoom→bbox→answer 的完整空间，**无需调整 max_turns**
+- 训练段障碍（视觉 token / AdamW 状态）已定位并出方案（见 07_rl_debug_report 根因 1/2）
+
+**前置动作（跑全量前必须做，两条都是硬要求）：**
+
+1. **开 reward 分解打印**：`patch_reward.py` 的 `num_examine` 默认 0（门控全关）、`base_reward.py` 的 `verbose` 默认关 → 下次任何冒烟/全量都在命令行开 `trainer.num_examine=50` 或对应配置，让 `[ATR] acc=... U=... C=... S=... → R=` 逐条打出来。**50 步止损没有 acc/U/C/S 分解就是盲跑**（本次回报已证明：mean reward 0.387 无法判断 U/C/S 各自行为）。
+2. **processor_config.json 变更入库**：该修复（16M→1M 像素）只存在于远端模型目录、不进 git——**换实例/重装即丢失，且本地无法审计**。要求远端把修改后的 `processor_config.json` 全文贴进 `06_4gpu_rl_exec.md` 回报节（几行 JSON，`git diff` 一下贴出来），并在 `02_env_setup.md` 的环境清单里加一行"模型目录 processor_config 已改 1M 像素，勿回退"。
+
+### 决策 2：50 步止损指标细化为三条硬门槛
+
+前 50 步（每步 32 条 rollout，样本量足够）逐条满足才算"在学"：
+
+| # | 指标 | 通过线 | 不满足时的动作 |
+|---|------|--------|----------------|
+| 1 | `actor/pg_loss` | 有下降趋势（非恒定/发散） | 停，回报 loss 曲线 |
+| 2 | `agent/tool_call_mean` | 保持 > 0.5（不塌缩为 0） | 停——U/C/S 信号消失 |
+| 3 | **`critic/acc/acc_of_this_batch`** | **出现非 0 值（不需要高，但必须离开 0）** | 停——模型学不会作答，可能模板/分布偏移 |
+
+三条全过 → 继续到 640 步；任一不过 → 停 + 回报三指标曲线 + 若已存 checkpoint 说明路径。**acc 恒 0 是最可能的风险点**：SFT v2 先答后验版在 RL 环境 100% 调工具且 8/8 全错，提示 RL 模板与 SFT 训练分布存在偏移，首 50 步若 acc 不动说明偏移未被 RL 吸收。
+
+### 决策 3：对 07_rl_debug_report 五个问题的本地回答
+
+1. **Adafactor 收敛**：`beta2_decay=-0.8` 即 Adafactor 原论文默认 `beta2_decay=0.8`（torch 2.8 把 0.8 写成了 -0.8 的命名历史），语义一致。GRPO 目标非平稳，短记忆二阶矩（decay 0.8）通常**更稳**而非更差；不需要预先调。真机首步只看 pg_loss 是否下降 + reward 均值是否上升即可判定，异常才回退 adamw。
+2. **降显存替代**：LoRA 在 verl 0.2.0.dev 无训练支持（05 已确认，RL 全参是唯一路径）；bf16 优化器状态（bitsandbytes 8bit）会引入新依赖且 FSDP 分片兼容性未验证 → **Adafactor 是当前最优解，同意定稿**。1.2G 余量偏紧但 2 卡 Mini 账本精确吻合，可接受；`ppo_max_token_len_per_gpu=3072` 已是保守值，首步 OOM 时先降它，别动 util/n。
+3. **max_pixels 一致性**：SFT `max_image_size: 1024` 与 RL 1M 像素预算 = 同一数量级（1024²≈1M），**等价**，分布偏移风险低。首轮验证时顺带 grep rollout 日志确认无 truncation 告警即可。
+4. **微批策略**：视觉 3696-3900 + 文本 ~1900 + 响应 → 单样本 ~8-11k token，3072/gpu 下会切 3-4 个微批，token 利用率一般但可跑。首步峰值通过后可选试 4096-6144 提吞吐，**不阻塞、不是本轮目标**。
+5. **首轮验证清单补充**：冒烟四项（开 num_examine）→ 全量首步观测（`grep OutOfMemory` + step 峰值）→ 前 25 步 checkpoint 落盘成功确认 → 50 步三指标回报。回报格式：三指标曲线 + `[ATR]` 分解样例 3-5 条 + 若有问题附日志原文。
+
+### 红线（沿用）
+
+- 不启动全量直到：① 冒烟（开分解打印）重跑确认无回归；② 本文件变更已 push
+- checkpoint/日志/processor_config 变更文件不进 git；回报写 06/07 回报节 + commit `[remote] ...`
