@@ -1,20 +1,38 @@
-"""GPU 验证：chunk 级权重收集在真实 FSDP1（world>1, nccl）下工作。
+"""GPU 验证:chunk 级 lm_head 在真实 FSDP1(world>1, nccl)下工作。
 
-与生产 `_vstar_chunked_forward`（dp_actor.py）完全相同的实现，迷你模型
-（hidden=64, vocab=8192）经 FSDP1（use_orig_params=False）分片到 2 进程，
-共享同一张 GPU：
+与生产 dp_actor + verl qwen3_vl.forward_with_normal_backend 相同的实现与
+调用时机——**FSDP 根 forward 内**(verl 的 return_hidden_states 分支在模型
+forward 期间调用 patch 过的 lm_head,此时 flat 处于 unshard 状态,模块
+参数 = 全量 view):迷你模型(hidden=64, vocab=8192)经 FSDP1
+(use_orig_params=False)分片到 2 进程:
 
   1. 裸参数 junk(37,64) 放在 lm_head 前 → flat 顺序 = 注册顺序 → shard
-     边界 (total/2) 恰好落在 lm_head 某行中间（真实分片行分裂场景）
-  2. patch lm_head.forward = chunked 实现，走完整 model(x)（FSDP pre-hook
-     unshard → patch forward 读 _local_shard → chunk all_gather → backward
-     FSDP post-hook reduce-scatter → optimizer step）
-  3. 断言：
+     边界 (total/2) 恰好落在 lm_head 某行中间(真实分片行分裂场景)
+  2. Mini.forward 调用 patch 过的 self.head(模拟 verl return_hidden_states
+     分支在模型 forward 内调用 lm_head)→ chunk 级 logprobs 直接在 FSDP
+     forward 内算出(权重全量 view 直接切片,无手工 all_gather)
+  3. 断言:
      - logprobs vs 全量 log_softmax 参考 maxdiff < 1e-3
-     - optimizer step 后 lm_head 权重变化 > 0（梯度真正回传 FSDP flat shard）
+     - optimizer step 后 lm_head 权重变化 > 0(梯度经 FSDP AllGather
+       backward reduce-scatter 正常回传 flat shard)
 
-用法（1 卡 2 进程，nccl 同设备）：
-  NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 CUDA_VISIBLE_DEVICES=0 \
+排障史(2026-08-12 4x3090 实机):
+  - 1 卡 2 进程 NCCL duplicate GPU 不可行;2 卡 2 进程需 set_device(local_rank)
+  - **FSDP forward 外调用在结构上不可行**:reshard 后 flat 的 shape 恒为
+    「全量」(534848)而数据只是本地分片(267424)。分片坐标切片 → 数据对
+    但 SliceBackward 输出 shard 大小梯度与 flat 期望的全量形状冲突
+    (`got [267424] but expected [534848]`,实机复现);全量坐标切片 → 梯度
+    形状对但数据错位;`_local_shard`(=flat.data, detached)与
+    `FSDP.summon_full_params`(纯数据交换, 无 autograd Function)梯度全断
+  - 手工 all_gather 组装(shard 坐标 + intra_param_start_idx + index_copy)
+    数值正确(9.5e-07)但梯度无法与 FSDP 的归约机制兼容——Flat 的梯度
+    只能由 FSDP 自己的 AllGather backward 产生
+  - **正解 = 移进 FSDP forward 内**:模型 forward 期间 flat unshard,模块
+    参数是全量 view,直接切片算 chunk logprobs,梯度走 AllGather backward
+    reduce-scatter(本脚本即此路径的验证)
+
+用法(2 卡 2 进程):
+  CUDA_VISIBLE_DEVICES=0,1 NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 \
   torchrun --nproc_per_node=2 --master_port=29599 verify_fsdp_chunk_gpu.py
 """
 import os
@@ -36,13 +54,12 @@ from verl.utils.torch_functional import logprobs_from_hidden  # noqa: E402  (生
 HIDDEN = 64
 VOCAB = 8192
 TEMP = 0.7
-CHUNK = 4096  # logprobs_from_hidden 默认 chunk → 2 次 gather_chunk 调用
 
 
 class Mini(nn.Module):
     def __init__(self):
         super().__init__()
-        # 裸参数放 lm_head 前：flat 顺序 = 注册顺序。
+        # 裸参数放 lm_head 前:flat 顺序 = 注册顺序。
         # total = 37*64 + 8192*64 = 526656 → shard 边界 263328 落在
         # lm_head 行 (263328-2368)/64 = 4077.5 → 行被 shard 边界切开。
         self.junk = nn.Parameter(torch.randn(37, HIDDEN))
@@ -51,105 +68,93 @@ class Mini(nn.Module):
         self.head.bias.data.zero_()
 
     def forward(self, x):
+        # 模拟 verl qwen3_vl.forward_with_normal_backend 的
+        # return_hidden_states 分支:模型 forward 内调用 (patch 过的) lm_head
         return self.head(x)
 
 
-def chunked_forward_impl(model, lm_head_module, x):
-    """与 dp_actor._vstar_chunked_forward 相同的实现（生产代码复制）。"""
-    flat = model._flat_param
-    target = None
-    for i, info in enumerate(flat._param_infos):
-        if info.module is lm_head_module:
-            target = i
-            break
-    if target is None:
-        raise RuntimeError("[CHUNK] lm_head not found in FSDP flat params")
-    si = flat._shard_param_infos[target]
-    hidden_dim = x.shape[-1]
-    world = dist.get_world_size()
-    local = flat._local_shard.to(x.device)
-    in_shard = int(si.in_shard)
-    off = int(si.offset_in_shard or 0)
-    numel = int(si.numel_in_shard or 0)
-    meta = torch.tensor([in_shard, off, numel], dtype=torch.long, device=x.device)
-    metas = [torch.empty(3, dtype=torch.long, device=x.device) for _ in range(world)]
-    dist.all_gather(metas, meta)
-    total_numel = sum(int(m[2]) for m in metas if int(m[0]))
-    vocab_size = total_numel // hidden_dim
-    if dist.get_rank() == 0:
-        print(
-            f"[CHUNK] pieces={[(int(m[0]), int(m[1]), int(m[2])) for m in metas]} vocab={vocab_size}",
-            flush=True,
+def chunked_forward_impl(lm_head_module, x):
+    """与生产 dp_actor._vstar_chunked_forward 相同的实现(生产代码复制)。
+
+    在 FSDP 根 forward 内被调用:flat 处于 unshard 状态,模块参数
+    `lm_head.weight` 是 (vocab, hidden) 的全量 view,直接按 chunk 切片
+    (weight_gather_fn=None, logprobs_from_hidden 内部切片)即可;梯度经
+    view → AllGather backward(reduce-scatter)回 flat shard,与 FSDP 的
+    归约机制完全兼容。无需手工 all_gather / index_copy / 坐标换算。
+    """
+    if x.dim() == 3:  # verl 模型 forward 传 (1, nnz, hidden)
+        x = x.squeeze(0)
+    calc_entropy = getattr(lm_head_module, "_calc_entropy", False)
+    if calc_entropy:
+        lp, ent = logprobs_from_hidden(
+            hidden=x,
+            lm_head_weight=lm_head_module.weight,
+            labels=lm_head_module._labels,
+            temperature=lm_head_module._temp,
+            compute_entropy=True,
         )
-    if in_shard and numel > 0:
-        g0 = off // hidden_dim
-        g1 = (off + numel - 1) // hidden_dim + 1
-        n_rows = g1 - g0
-        row_tensor = torch.zeros(n_rows, hidden_dim, dtype=local.dtype, device=x.device)
-        elem_s = max(off, g0 * hidden_dim)
-        elem_e = min(off + numel, g1 * hidden_dim)
-        if elem_s < elem_e:
-            dst_s = elem_s - g0 * hidden_dim
-            row_tensor.view(-1)[dst_s : dst_s + (elem_e - elem_s)] = local[elem_s - off : elem_e - off]
-        g_idx = torch.arange(g0, g1, device=x.device)
-    else:
-        row_tensor = None
-        g_idx = None
-
-    def gather_chunk(start, end):
-        contrib = torch.zeros(end - start, hidden_dim, dtype=local.dtype, device=x.device)
-        if row_tensor is not None:
-            mask = (g_idx >= start) & (g_idx < end)
-            if mask.any():
-                contrib[g_idx[mask] - start] = row_tensor[mask]
-        gathered = torch.distributed.nn.all_gather(contrib)  # autograd-aware
-        return torch.stack(gathered).sum(dim=0)
-
+        lm_head_module._entropy_out = ent
+        return lp
     return logprobs_from_hidden(
         hidden=x,
-        lm_head_weight=None,
+        lm_head_weight=lm_head_module.weight,
         labels=lm_head_module._labels,
         temperature=lm_head_module._temp,
-        weight_gather_fn=gather_chunk,
-        vocab_size=vocab_size,
     )
 
 
 def main():
     dist.init_process_group(backend="nccl")
     rank = dist.get_rank()
-    torch.cuda.set_device(0)
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
     torch.manual_seed(0)
     if rank == 0:
-        print(f"[VERIFY] world={dist.get_world_size()} device=0 (2 procs share 1 GPU)", flush=True)
+        print(f"[VERIFY] world={dist.get_world_size()} device={local_rank}", flush=True)
 
     model = Mini().cuda()
     model = FSDP(model, use_orig_params=False)
 
-    # 参考全量权重（summon 后取）
+    # 参考全量权重(summon 后取)
     with torch.no_grad():
         with FSDP.summon_full_params(model):
             w_ref = model.head.weight.detach().clone()
 
-    x = torch.randn(5, HIDDEN, device="cuda")  # 模拟 last_hidden_state（需梯度）
+    x = torch.randn(1, 5, HIDDEN, device="cuda", requires_grad=True)  # 模拟 3D last_hidden_state
     labels = torch.randint(0, VOCAB, (5,), device="cuda")
+
+    # 生产等价:patch lm_head.forward(在第一次模型 forward 前完成,生产在
+    # dp_actor.__init__ 里做),然后 FSDP forward 内自动调用 chunked 实现
     model.head._labels = labels
     model.head._temp = TEMP
-    model.head.forward = lambda h: chunked_forward_impl(model, model.head, h)
+    model.head.forward = lambda h: chunked_forward_impl(model.head, h)
+    lp = model(x)  # FSDP forward 内得到 chunked logprobs
 
-    out = model(x)  # 完整 FSDP forward（pre-hook unshard → patch forward → post-hook）
-    lp = out[torch.arange(5), labels]
-
-    # 参考：全量 log_softmax
-    logits_ref = (x.detach() @ w_ref.T) / TEMP
+    # 参考:全量 log_softmax
+    logits_ref = (x.squeeze(0).detach() @ w_ref.T) / TEMP
     lp_ref = torch.log_softmax(logits_ref, dim=-1)[torch.arange(5), labels]
     err = (lp - lp_ref).abs().max().item()
     if rank == 0:
         print(f"[VERIFY] logprobs maxdiff vs full-softmax: {err:.3e}", flush=True)
     assert err < 1e-3, f"logprob mismatch {err}"
 
-    # backward（FSDP post-hook 自动 reduce-scatter）+ optimizer step
-    loss = -lp.sum()
+    # entropy 微批(生产 calculate_entropy=True):同一 chunked forward 带
+    # compute_entropy,额外返回分块累计的策略熵;参考 = 全量
+    # entropy_from_logits(temperature-scaled logits,与生产旧路径一致)
+    from verl.utils.torch_functional import entropy_from_logits  # noqa: E402
+
+    model.head._calc_entropy = True
+    lp2 = model(x)
+    ent = model.head._entropy_out
+    ent_ref = entropy_from_logits(logits_ref)
+    ent_err = (ent - ent_ref).abs().max().item()
+    if rank == 0:
+        print(f"[VERIFY] entropy maxdiff vs full: {ent_err:.3e}", flush=True)
+    assert ent_err < 1e-3, f"entropy mismatch {ent_err}"
+
+    # backward + optimizer step(梯度经 FSDP AllGather backward 回 flat shard;
+    # 两个图都回传,模拟训练中 logprobs 与 entropy 微批交替)
+    loss = -(lp.sum() + lp2.sum())
     loss.backward()
     before = {}
     with FSDP.summon_full_params(model):

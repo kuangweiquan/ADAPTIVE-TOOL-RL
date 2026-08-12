@@ -96,9 +96,18 @@ def forward_with_normal_backend(
     outputs = qwen3_vl_forward(self, input_ids, **kwargs)
     hidden_states = outputs[0]  # last_hidden_state
     if return_hidden_states:
-        # 2x24G: skip lm_head so verl can compute log-softmax chunked over
-        # the vocab (logprobs_from_hidden) instead of materializing the
-        # full (nnz, vocab) logits + dlogits during backward.
+        # 2x24G: compute the log-softmax chunked over the vocab instead of
+        # materializing the full (nnz, vocab) logits + dlogits during
+        # backward. This runs INSIDE the FSDP root forward, where the flat
+        # is unsharded and lm_head.weight is the full view — the only spot
+        # where a sliced lm_head weight is autograd-compatible with FSDP
+        # (outside the forward the flat is resharded: slice data
+        # misaligns / shard-sized grads clash with the full-sized flat,
+        # reproduced in verify_fsdp_chunk_gpu). The (patched) chunked
+        # forward stashes the log_probs on the module; dp_actor picks them
+        # up after the model returns.
+        log_probs = self.lm_head(hidden_states)
+        self.lm_head._vstar_log_probs = log_probs
         return Qwen3VLCausalLMOutputWithPast(logits=None, hidden_states=hidden_states)
     logits = self.lm_head(hidden_states)
     return Qwen3VLCausalLMOutputWithPast(

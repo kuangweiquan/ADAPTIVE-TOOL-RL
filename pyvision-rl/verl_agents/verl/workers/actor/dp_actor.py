@@ -24,7 +24,6 @@ import torch
 from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-import torch.distributed.nn  # autograd-aware all_gather for chunked lm_head
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
@@ -59,6 +58,61 @@ class DataParallelPPOActor(BasePPOActor):
             if self.config.get("use_torch_compile", True)  #  use torch compile by default
             else verl_F.entropy_from_logits
         )
+
+        # Patch lm_head.forward to the chunked log-softmax BEFORE the first
+        # model forward. verl qwen3_vl.forward_with_normal_backend calls
+        # self.lm_head(hidden_states) INSIDE the FSDP root forward
+        # (return_hidden_states branch), while the flat is unsharded and
+        # lm_head.weight is the full (vocab, hidden) view. Doing it there is
+        # the only autograd-compatible spot: outside the forward the flat is
+        # resharded (shape stays "full" but data is the local shard), so any
+        # slice is either misaligned or produces a shard-sized grad that
+        # conflicts with the full-sized flat (SliceBackward0 got [shard] but
+        # expected [full], reproduced in verify_fsdp_chunk_gpu); _local_shard
+        # (flat.data, detached) and summon_full_params (plain data swap) both
+        # drop gradients entirely.
+        lm_head_module = self.actor_module.lm_head
+        if not getattr(lm_head_module, "_vstar_chunked_fwd", False):
+            lm_head_module._vstar_orig_forward = lm_head_module.forward
+
+            def _vstar_chunked_forward(x):
+                # Called INSIDE the FSDP root forward (see above):
+                # lm_head.weight is the full unsharded view, so
+                # logprobs_from_hidden slices it per vocab chunk and the
+                # peak logits/dlogits memory stays O(chunk x hidden).
+                # Gradients flow through the view into the FSDP AllGather
+                # and are reduce-scattered into the flat shard by the
+                # standard backward — no manual all_gather needed.
+                if getattr(lm_head_module, "_vstar_labels", None) is None:
+                    # Fallback (should not happen: both the training and
+                    # the entropy micro-batches set labels before the
+                    # model forward). Returns the full (nnz, vocab) logits.
+                    return lm_head_module._vstar_orig_forward(x)
+                if x.dim() == 3:  # model forward passes (1, nnz, hidden)
+                    x = x.squeeze(0)
+                if getattr(lm_head_module, "_vstar_calc_entropy", False):
+                    # entropy micro-batch: also compute the policy entropy
+                    # chunked (no full-logits materialization — the full
+                    # (nnz, vocab) logits/dlogits pair plus the fp32 lm_head
+                    # gradient overflowed 4x24G in real training)
+                    log_probs, entropy = logprobs_from_hidden(
+                        hidden=x,
+                        lm_head_weight=lm_head_module.weight,
+                        labels=lm_head_module._vstar_labels,
+                        temperature=lm_head_module._vstar_temp,
+                        compute_entropy=True,
+                    )
+                    lm_head_module._vstar_entropy = entropy
+                    return log_probs
+                return logprobs_from_hidden(
+                    hidden=x,
+                    lm_head_weight=lm_head_module.weight,
+                    labels=lm_head_module._vstar_labels,
+                    temperature=lm_head_module._vstar_temp,
+                )
+
+            lm_head_module.forward = _vstar_chunked_forward
+            lm_head_module._vstar_chunked_fwd = True
 
     def _forward_micro_batch(
         self, micro_batch, temperature, calculate_entropy=False
@@ -117,6 +171,21 @@ class DataParallelPPOActor(BasePPOActor):
 
                 input_ids_rmpad_rolled = input_ids_rmpad_rolled.squeeze(0)  # ((total_nnz / sp) + pad)
 
+                # chunked logprobs path: the labels/temperature must be
+                # visible to the (patched) lm_head BEFORE the model forward
+                # below — verl qwen3_vl.forward_with_normal_backend calls
+                # self.lm_head(hidden_states) inside the FSDP root forward,
+                # where the chunked log-softmax runs (see the patch in
+                # __init__). Both the training and the entropy micro-batches
+                # set labels (both need log_probs); the entropy flag makes
+                # the chunked forward also compute the policy entropy
+                # chunked, so no full (nnz, vocab) logits are materialized
+                # (that overflowed 4x24G in real training).
+                lm_head_module = self.actor_module.lm_head
+                lm_head_module._vstar_labels = input_ids_rmpad_rolled
+                lm_head_module._vstar_temp = temperature
+                lm_head_module._vstar_calc_entropy = bool(calculate_entropy)
+
                 # only pass input_ids and position_ids to enable flash_attn_varlen
                 output = self.actor_module(
                     input_ids=input_ids_rmpad,
@@ -124,126 +193,34 @@ class DataParallelPPOActor(BasePPOActor):
                     position_ids=position_ids_rmpad,
                     **multi_modal_inputs,
                     use_cache=False,
-                    # 2x24G: skip lm_head when entropy is not needed; the
-                    # chunked logprobs_from_hidden then keeps logits/dlogits
-                    # memory bounded to a single vocab chunk
-                    return_hidden_states=not calculate_entropy,
+                    # 2x24G: compute the chunked log-softmax inside the
+                    # FSDP forward (return_hidden_states branch of verl
+                    # qwen3_vl.forward_with_normal_backend) so logits/
+                    # dlogits memory stays bounded to a single vocab chunk
+                    return_hidden_states=True,
                 )  # prevent model thinks we are generating
 
                 if calculate_entropy:
-                    logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
-                    logits_rmpad.div_(temperature)
-                    log_probs = logprobs_from_logits(
-                        logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=False
-                    )
-                    # compute entropy
-                    entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
+                    # the chunked lm_head computed log_probs AND entropy
+                    # inside the FSDP forward; entropy is stashed on the
+                    # module (temperature-scaled logits, same semantics as
+                    # the old entropy_from_logits path)
+                    log_probs = lm_head_module._vstar_log_probs
+                    entropy_rmpad = lm_head_module._vstar_entropy
                 else:
-                    hidden_f = output.hidden_states.squeeze(0)
-                    # FSDP flattens lm_head into a 1D shard; calling the
-                    # module (instead of reading .weight) runs inside the
-                    # FSDP pre/post hooks, where the weight is the full
-                    # unsharded flat view. Patch the instance forward to do
-                    # the chunked log-softmax there so gradients are
-                    # reduced by FSDP normally.
-                    lm_head_module = self.actor_module.lm_head
-                    if not getattr(lm_head_module, "_vstar_chunked_fwd", False):
-                        def _vstar_chunked_forward(x):
-                            # FSDP shards lm_head across ranks; a rank may
-                            # hold zero rows of the vocab (flat-param
-                            # boundary). The full weight must be identical
-                            # on every rank for the DP-parallel log_probs.
-                            # FSDP1 flattens lm_head with embed_tokens etc.
-                            # into one outer flat; the rank-local view is a
-                            # 1D element slice whose boundary can split a
-                            # row. Assembling the whole weight at once
-                            # (all_gather of the full flat, ~2.8G on 4x3090)
-                            # OOMs in the train segment, so we assemble it
-                            # per-vocab-chunk: each rank contributes the rows
-                            # it owns (zero-filled), all_gather moves only
-                            # O(chunk x hidden) per call, and each row is
-                            # summed to full value (split rows complete each
-                            # other since only the owner rank is nonzero).
-                            flat = self.actor_module._flat_param
-                            target = None
-                            for i, info in enumerate(flat._param_infos):
-                                if info.module is lm_head_module:
-                                    target = i
-                                    break
-                            if target is None:
-                                raise RuntimeError("[CHUNK] lm_head not found in FSDP flat params")
-                            si = flat._shard_param_infos[target]
-                            hidden_dim = x.shape[-1]
-                            world = torch.distributed.get_world_size()
-                            if world == 1:
-                                w = lm_head_module.weight.view(-1, hidden_dim)
-                                return logprobs_from_hidden(
-                                    hidden=x,
-                                    lm_head_weight=w,
-                                    labels=lm_head_module._vstar_labels,
-                                    temperature=lm_head_module._vstar_temp,
-                                )
-                            # NOTE: keep the autograd link (no `.data`): the
-                            # chunk gather must credit gradients back to the
-                            # FSDP flat shard, or lm_head never updates.
-                            local = flat._local_shard.to(x.device)
-                            in_shard = int(si.in_shard)
-                            off = int(si.offset_in_shard or 0)
-                            numel = int(si.numel_in_shard or 0)
-                            meta = torch.tensor([in_shard, off, numel], dtype=torch.long, device=x.device)
-                            metas = [torch.empty(3, dtype=torch.long, device=x.device) for _ in range(world)]
-                            torch.distributed.all_gather(metas, meta)  # tiny, non-autograd
-                            total_numel = sum(int(m[2]) for m in metas if int(m[0]))
-                            vocab_size = total_numel // hidden_dim
-                            print(
-                                f"[CHUNK] pieces={[(int(m[0]), int(m[1]), int(m[2])) for m in metas]} "
-                                f"vocab={vocab_size}",
-                                flush=True,
-                            )
-                            # Row-tensor of the local element slice (edge rows
-                            # zero-filled) plus their global row ids.
-                            if in_shard and numel > 0:
-                                g0 = off // hidden_dim
-                                g1 = (off + numel - 1) // hidden_dim + 1
-                                n_rows = g1 - g0
-                                row_tensor = torch.zeros(n_rows, hidden_dim, dtype=local.dtype, device=x.device)
-                                elem_s = max(off, g0 * hidden_dim)
-                                elem_e = min(off + numel, g1 * hidden_dim)
-                                if elem_s < elem_e:
-                                    dst_s = elem_s - g0 * hidden_dim
-                                    row_tensor.view(-1)[dst_s : dst_s + (elem_e - elem_s)] = local[
-                                        elem_s - off : elem_e - off
-                                    ]
-                                g_idx = torch.arange(g0, g1, device=x.device)
-                            else:
-                                row_tensor = None
-                                g_idx = None
-
-                            def gather_chunk(start, end):
-                                contrib = torch.zeros(
-                                    end - start, hidden_dim, dtype=local.dtype, device=x.device
-                                )
-                                if row_tensor is not None:
-                                    mask = (g_idx >= start) & (g_idx < end)
-                                    if mask.any():
-                                        contrib[g_idx[mask] - start] = row_tensor[mask]
-                                gathered = torch.distributed.nn.all_gather(contrib)  # autograd-aware
-                                return torch.stack(gathered).sum(dim=0)  # each row owned by 1 rank
-
-                            return logprobs_from_hidden(
-                                hidden=x,
-                                lm_head_weight=None,
-                                labels=lm_head_module._vstar_labels,
-                                temperature=lm_head_module._vstar_temp,
-                                weight_gather_fn=gather_chunk,
-                                vocab_size=vocab_size,
-                            )
-
-                        lm_head_module.forward = _vstar_chunked_forward
-                        lm_head_module._vstar_chunked_fwd = True
-                    lm_head_module._vstar_labels = input_ids_rmpad_rolled
-                    lm_head_module._vstar_temp = temperature
-                    log_probs = lm_head_module(hidden_f)
+                    # The chunked lm_head already ran inside the FSDP forward
+                    # (return_hidden_states branch of verl
+                    # qwen3_vl.forward_with_normal_backend) and stashed its
+                    # log_probs on the module. Do NOT call the module again
+                    # here: outside the forward the flat is resharded and
+                    # the weight is a shard view (autograd-incompatible,
+                    # see verify_fsdp_chunk_gpu).
+                    log_probs = lm_head_module._vstar_log_probs
+                    print(
+                        f"[MB diag] real nnz={int(input_ids_rmpad_rolled.numel())} "
+                        f"has_img={bool(multi_modal_inputs)}",
+                        flush=True,
+                    )
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -417,6 +394,11 @@ class DataParallelPPOActor(BasePPOActor):
                 self.actor_optimizer.zero_grad()
 
                 for data in micro_batches:
+                    # 4x24G: return free cache-pool blocks to the driver before
+                    # each micro-batch (the pool keeps ~5G reserved between
+                    # micro-batches; long multi-image samples then peak at
+                    # free=0.9G and the backward's ~1.1G increment overflows)
+                    torch.cuda.empty_cache()
                     # Support all hardwares
                     if isinstance(data, DataProto):
                         data = {**data.batch.to(torch.cuda.current_device()), **data.non_tensor_batch}
@@ -451,9 +433,12 @@ class DataParallelPPOActor(BasePPOActor):
                         micro_batch=data, temperature=temperature, calculate_entropy=calculate_entropy
                     )
                     free_mem, _ = torch.cuda.mem_get_info()
+                    nnz = int(data["input_ids"].shape[1])
+                    n_mb = int(data["responses"].shape[0])
                     print(
                         f"[MB diag] post-fwd: alloc={torch.cuda.memory_allocated()/1e9:.2f}G "
-                        f"reserved={torch.cuda.memory_reserved()/1e9:.2f}G free={free_mem/1e9:.2f}G",
+                        f"reserved={torch.cuda.memory_reserved()/1e9:.2f}G free={free_mem/1e9:.2f}G "
+                        f"seqlen={nnz} mb={n_mb}",
                         flush=True,
                     )
 

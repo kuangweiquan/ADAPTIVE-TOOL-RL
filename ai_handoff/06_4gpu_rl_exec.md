@@ -97,3 +97,47 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
   直接跑 `setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &`，
   10 秒级轮询 `grep -E "\[CHUNK\]|pg_loss|\[ATR\] acc|OutOfMemory" logs/qwen3vl_8b_sftv2_grpo_4gpu.log`
   等 STEP1_DONE（actor/pg_loss + [ATR] acc）。
+
+---
+
+## 回报 3（2026-08-12，远端 2 卡调试，GPU 不足期）
+
+> 用户期 GPU 不足（2×24G），先做能做的调试。结论：**4 卡 OOM 根因 = 视觉 token 无限制（已修复），但 4×24G 全参训练另有物理极限（step 峰值 33.6G），必须换 8 卡或降训练参数量。**
+
+### ① 4 卡 OOM 根因（确凿，已修复）
+- **processor_config.json 的 `size` 语义 = 像素预算**：原配置 `longest_edge=16777216`（16M 像素≈无限制）且无 max_pixels
+  → Qwen2VLImageProcessorFast 按原始分辨率处理：171 张图全部 ≥9964 视觉 token（中位 13254，最大 32400，尺寸 1500×1827~5759×1440），而文本 nnz 仅 4121-5124。
+  **视觉 token 从没进过显存账本 = 4 卡微批 6-8 OOM 根因**（不同样本视觉 token 差异 13160-32400 → 微批间峰值差 3-4G）。
+- **修复**（远端模型目录，本地无此文件）：`/root/autodl-tmp/models/Qwen3-VL-8B-ATR-SFT-v2/processor_config.json`
+  → `size={"longest_edge": 1003520, "shortest_edge": 3136}`（≈1M 像素 = transformers max_pixels 默认值，≈1024 边长，与 SFT `max_image_size: 1024` 一致）
+  → 视觉 token 全样本降到 3696-3900（降 8 倍）。vLLM 采样端 + FSDP 训练端共用此 processor，一处改两处生效。
+- 数据机制（verify_data_build.py 钉死）：input_ids 仅 1 个 image_pad(151652) 占位，grid_patch(≈3800) 由模型 forward 内部展开；postprocess_data 右截断/pad 5120 不触发截断（文本 ~1900）。
+
+### ② 4×24G 全参训练物理极限（本轮新发现，与视觉无关）
+- **真实参数量**：safetensors 17.5G（bf16）= **8.75B**（GQA：qkv 21M + o 16.8M + MLP 151M = 189M/层 ×36 = 6.8B + emb 1.24B + vision 0.71B）。
+- **生产 FSDP 语义**（fsdp_workers.py）：actor 模型 **fp32 创建**（179 行注释：bf16 优化器不正确）、
+  `use_orig_params=True`（245-248 行：视觉塔 `requires_grad_(False)` 强制）、MixedPrecision bf16、
+  梯度 fp32（reduce_dtype 默认 fp32）、AdamW 状态惰性创建（第一轮 step 前不在 GPU）。
+- **第一轮 update_policy 的 optimizer.step() 峰值（4 卡）**：
+  参数 bf16 全量 unshard 8.04G（FSDP use_orig_params=True step 时 unshard）+ 视觉 frozen 全量 1.42G
+  + 梯度 fp32 分片 8.04G + Adam 状态 fp32 分片 16.08G ≈ **33.6G > 24G，激活为 0 也崩**。
+- **Mini 同构复现**（/tmp/verify_accum.py，2 卡 24G，3.04G 迷你模型 + 生产语义全模拟）：
+  微批循环 forward/backward 能过（ckpt 生效时 post-fwd 7.77G），**round1 optimizer.step() 创建状态 + unshard 时 OOM**
+  （崩点 in use 23.11G ≈ 参数 1.52+3.04 全量 + 梯度 6.08 + 状态 12.2，精确匹配）→ 与 8B 4 卡同构。
+- **Q3 顺带结论**：「ckpt 生效仍 +0.68G/层逐层累积」= **无 ckpt 的正常行为**（Mini CKPT=0 同构递增，CKPT=1 平坦降半）；
+  8B 2 卡观察到的累积是 ckpt 未生效（生产中 enable_gradient_checkpointing=True 于语言模型，生效时曲线平坦）。
+- **因此**：视觉 token 修复（3800）只能让微批循环通过；**第一轮 step 必 OOM → 4×24G 全参 8B 物理不可行**，不是 bug。
+
+### ③ 下一步选项（需用户拍板）
+| 方案 | 4 卡账本(step) | 改动 | 备注 |
+|------|---------------|------|------|
+| **8×24G 或 4×32G+** | 8 卡: 参数 1.0+视觉 1.42+梯度 2.0+状态 4.0 ≈ 8.4G ✓ | 无 | 最稳，视觉 1.42G 全量每卡不变 |
+| **LoRA**（verl 是否支持需查） | 可训练 ~0.5B → 全部 <4G ✓ | 中 | RL 中 LoRA 收敛质量待验证 |
+| **Adafactor**（状态 1×） | 4.02+1.42+8.04+4.0 ≈ 17.5G ✓ | 小（fsdp_workers.py 319 行换 optimizer） | 收敛行为差异大，RL 少见 |
+| 冻结 decoder 部分层 | 线性降 | 小 | 训练质量未知 |
+| **2 卡 + 更大显存** | 不可能（2 卡 8B 连纯文本 1902 token 都 OOM，物理极限实锤） | - | 已排除 |
+
+### ④ 本轮新增脚本（已入库）
+- `experiments/scripts/verify_data_build.py`：CPU 验证 rl_dataset 数据构建（processor 1M 像素 + postprocess_data + get_rope_index），171/171 样本 img_tok(1) < grid(3696-3900)。
+- `experiments/scripts/verify_microbatch_2gpu.py`：2 卡真实 8B + 真实数据 + 生产微批路径（unpad/position_ids/chunked lm_head/FSDP），RESP_LEN/NOIMG/HOOKS/OFFLOAD/CKPT 环境变量控制。
+- 用法（需 GPU）：见文件头 docstring。

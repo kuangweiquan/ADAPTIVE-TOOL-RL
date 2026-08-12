@@ -54,6 +54,7 @@ def logprobs_from_hidden(
     chunk: int = 4096,
     weight_gather_fn=None,
     vocab_size=None,
+    compute_entropy: bool = False,
 ) -> torch.Tensor:
     """Memory-bounded lm_head + log-softmax, chunked over the vocab.
 
@@ -109,7 +110,26 @@ def logprobs_from_hidden(
         if mask.any():
             label_logits[mask] = logits_chunk[mask, labels[mask] - start]
         del logits_chunk, lse_chunk
-    return label_logits - lse
+    log_probs = label_logits - lse
+    if not compute_entropy:
+        return log_probs
+    # pass 2: entropy = lse - sum_v(p_v * logits_v), p = exp(logits - lse).
+    # Needs the final lse, so re-sweep the vocab chunks (matmul recompute,
+    # peak stays O(nnz x chunk)). Matches entropy_from_logits semantics on
+    # the temperature-scaled logits; fp32 accumulation for stability.
+    acc = torch.zeros(n, device=device, dtype=torch.float32)
+    for start in range(0, vocab, chunk):
+        end = min(start + chunk, vocab)
+        if weight_gather_fn is not None:
+            w_chunk = weight_gather_fn(start, end)
+        else:
+            w_chunk = lm_head_weight[start:end]
+        logits_chunk = (hidden @ w_chunk.T).float()  # (nnz, chunk) fp32
+        logits_chunk.div_(temperature)
+        p = (logits_chunk - lse.unsqueeze(-1)).exp()
+        acc += (p * logits_chunk).sum(dim=-1)
+        del logits_chunk, p
+    return log_probs, lse - acc
 
 
 def logprobs_from_logits(logits, labels, inplace_backward=True):
