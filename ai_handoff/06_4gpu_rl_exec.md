@@ -141,3 +141,36 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
 - `experiments/scripts/verify_data_build.py`：CPU 验证 rl_dataset 数据构建（processor 1M 像素 + postprocess_data + get_rope_index），171/171 样本 img_tok(1) < grid(3696-3900)。
 - `experiments/scripts/verify_microbatch_2gpu.py`：2 卡真实 8B + 真实数据 + 生产微批路径（unpad/position_ids/chunked lm_head/FSDP），RESP_LEN/NOIMG/HOOKS/OFFLOAD/CKPT 环境变量控制。
 - 用法（需 GPU）：见文件头 docstring。
+
+---
+
+## 回报 4（2026-08-12，4×24G 降显存方案定稿：Adafactor 优化器）
+
+> 用户澄清最大负荷 = **4×24G 3090**。回报 3 结论：4 卡账本 AdamW step 峰值 29.6G > 24G，全参训练物理不可行。
+> **本回报 = 降显存方案：优化器 AdamW → Adafactor（状态 2× fp32 → 1× fp32，省 8.0G/卡），4 卡可跑。**
+
+### 4×24G 最终账本（生产配置：model_dtype=bf16、视觉冻结、FSDP FULL_SHARD 4 卡）
+| 项 | dtype | 每卡 | 说明 |
+|----|-------|------|------|
+| 参数(8.04B 可训练) | bf16 分片 | 4.02G | model_dtype=bf16(脚本已配) |
+| 视觉(0.71B frozen) | bf16 分片 | 0.36G | **FSDP 对 frozen 参数也分片**(FROZEN=1 实验证实，非全量复制) |
+| 梯度 | fp32 分片 | 8.04G | FSDP1 梯度存储固定 fp32(reduce_dtype 只影响通信，实测证实) |
+| **Adafactor 状态** | fp32 分片 | **8.04G** | 1× fp32(vs AdamW 16.08G 2×) |
+| step 峰值 | | **≈22.4G** | 常驻 20.5G + 临时 ~2G < 23.57G ✓ 余量 ~1.2G |
+
+### 2 卡 Mini 同构验证（/tmp/verify_accum.py，生产语义全模拟，两轮 update_policy）
+- **AdamW**：round1 微批循环能过（ckpt 生效 post-fwd 7.77G），**step 崩（24.4G ≈ post-bwd 12.17 + 状态 12.16）**
+- **Adafactor + 视觉冻结**：状态仅 6.08G（分片参数 1.52G × 4B），round1/round2 全流程峰值 20.8G ✓
+- 附带结论：FSDP step **无参数 unshard**（峰值与账本精确吻合）；冻结参数不产生梯度/状态（峰值 20.8→17.2G）
+
+### 改动清单（已入库，git pull 即得）
+1. `pyvision-rl/verl_agents/verl/workers/fsdp_workers.py`：`optim_config.name` 分支——
+   `adafactor` 用 `optim.Adafactor(lr, weight_decay, beta2_decay=-0.8)`（torch 2.8 新签名，显式 lr 生效）；默认仍 adamw
+2. `pyvision-rl/verl_agents/verl/trainer/config/ppo_trainer.yaml`：`actor.optim.name: adafactor`（含账本注释）
+3. `run_vstar_full.sh`：显存账注释更新（(5) 段：optimizer 账本此前未计入 + Adafactor 修正）
+
+### 注意事项
+- **Adafactor 状态也是标准 Tensor**（offload_fsdp_optimizer/load 兼容，round2 load 生效已实测）；惰性初始化与 AdamW 相同（第一轮 step 前状态不在 GPU）
+- **收敛差异**：beta2_decay=-0.8（decay 0.8）vs AdamW beta2=0.999，二阶矩衰减快；GRPO 首轮训练观察 loss/reward，若异常回退 `name: adamw`（yaml 一行）
+- checkpoint 的 optimizer state 保存/恢复（FSDPCheckpointManager）对 Adafactor 通用（标准 torch state_dict）
+- 训练启动前 `grep -E "Total steps|pg_loss|\[ATR\] acc|OutOfMemory" logs/qwen3vl_8b_sftv2_grpo_4gpu.log`；首轮 step 是关键（此前从未跑过 step 阶段）

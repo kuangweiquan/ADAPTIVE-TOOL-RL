@@ -316,12 +316,25 @@ class ActorRolloutRefWorker(Worker):
         if role == "actor" and optim_config is not None:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
 
-            actor_optimizer = optim.AdamW(
-                actor_module_fsdp.parameters(),
-                lr=optim_config.lr,
-                betas=optim_config.get("betas", (0.9, 0.999)),
-                weight_decay=optim_config.get("weight_decay", 1e-2),
-            )
+            optimizer_name = optim_config.get("name", "adamw")
+            if optimizer_name == "adafactor":
+                # 4x24G 显存账本:AdamW 状态 fp32 2x = 16.1G/卡,step 峰值 29.6G > 24G 物理极限;
+                # Adafactor 状态 ~1x fp32 = 8.0G/卡,step 峰值 ~22.4G 可跑(torch>=2.6 新签名,
+                # beta2_decay=-0.8 即 decay 0.8;relative_step 语义已移除,显式 lr 直接生效)。
+                # Mini 同构验证:2 卡 24G 上 AdamW round1 step OOM(24.4G),Adafactor 两轮全通过(峰值 20.8G)。
+                actor_optimizer = optim.Adafactor(
+                    actor_module_fsdp.parameters(),
+                    lr=optim_config.lr,
+                    weight_decay=optim_config.get("weight_decay", 1e-2),
+                    beta2_decay=-0.8,
+                )
+            else:
+                actor_optimizer = optim.AdamW(
+                    actor_module_fsdp.parameters(),
+                    lr=optim_config.lr,
+                    betas=optim_config.get("betas", (0.9, 0.999)),
+                    weight_decay=optim_config.get("weight_decay", 1e-2),
+                )
 
             total_steps = optim_config.get("total_training_steps", 0)
             num_warmup_steps = int(optim_config.get("lr_warmup_steps", -1))

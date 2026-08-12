@@ -22,7 +22,11 @@
 #       entropy 分块版（torch_functional.py，chunk=16384，峰值 5.55G→~200M）
 #       + lm_head chunk 级权重收集（dp_actor.py gather_chunk + weight_gather_fn：
 #         all_gather 2.63G→~134M/chunk；并修 .data 切断的权重梯度回传）。
-#       当前剩余风险：无（最后一项 2.63G 已消除），若再 OOM 打印 alloc 账再降 3072。
+#   (5) 2026-08-12 优化器账本（此前未计入！）：AdamW 状态 fp32 2x 分片 = 16.1G/卡，
+#       step 峰值 29.6G > 24G → 4x24G 全参训练此前任何 step 都不可能过。
+#       换 Adafactor（yaml actor.optim.name=adafactor，状态 1x = 8.0G/卡）：
+#       step 峰值 ≈ 参数 4.4 + 梯度 8.0 + 状态 8.0 + 临时 ~2 = 22.4G < 23.57G ✓（余量 ~1.2G）。
+#       2 卡 Mini 同构验证：AdamW round1 step OOM(24.4G)，Adafactor 两轮全通过(峰值 20.8G)。
 #   rollout 段：权重 4.3 + KV（max_num_batched_tokens 8192）实测 17.2G < 0.6×23.57=14.1G 预算上限。
 # 注意：total_epochs=30，实际步数 = 滤超长后样本数/8 × 30（171 条全量≈640 步；滤掉>5120 后约 120-140 条≈450-520 步）
 set -x

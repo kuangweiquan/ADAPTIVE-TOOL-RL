@@ -60,6 +60,7 @@ actor_rollout_ref:
     checkpoint:
       contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
     optim:
+      name: adafactor # 4x24G: AdamW fp32 状态 16.1G/卡 → step 峰值 29.6G > 24G;Adafactor 状态 1x = 8.0G/卡,step ~22.4G 可跑(2026-08-12 2卡 Mini 同构验证)
       lr: 1e-6
       lr_warmup_steps: -1 # Prioritized. Negative values mean delegating to lr_warmup_steps_ratio.
       lr_warmup_steps_ratio: 0.  # the total steps will be injected during runtime
