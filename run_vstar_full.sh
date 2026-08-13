@@ -29,6 +29,11 @@
 #       2 卡 Mini 同构验证：AdamW round1 step OOM(24.4G)，Adafactor 两轮全通过(峰值 20.8G)。
 #   rollout 段：权重 4.3 + KV（max_num_batched_tokens 8192）实测 17.2G > 0.6×23.57=14.1G 预算上限，
 #       2026-08-13 改 0.5（KV 池上限 11.79G，配合 vllm sleep 权重 offload 保证训练段余量 ≥ 8.6G 刚需）。
+#   (6) 2026-08-13 晚 step28 OOM 复盘：训练段物理余量一直贴顶（post-bwd free 仅 0.07-0.55G），
+#       13312 token 长样本（prompt 5120+resp 8192 拉满）每步每 rank 必现（622 次 diag），
+#       backward 梯度 cast 临时 674MiB 随机踩线（free 0.07G < 674MiB）→ 崩溃概率性发生（0.6 时 step14，0.5 时 step28）。
+#       修复：+model.enable_gradient_checkpointing=True（36 层激活重算，forward/backward 峰值大幅下降，
+#       free 恢复 ~3-5G，代价训练变慢 ~25%）。此配置与 ppo_max_token_len_per_gpu 无关（多模态分支不切分样本，7ff1ebb 已知）。
 # 注意：total_epochs=30，实际步数 = 滤超长后样本数/8 × 30（171 条全量≈640 步；滤掉>5120 后约 120-140 条≈450-520 步）
 set -x
 source /root/miniconda3/etc/profile.d/conda.sh
@@ -66,9 +71,10 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ppo_mini_batch_size=1 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=2048 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=1536 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.use_torch_compile=False \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     +actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
