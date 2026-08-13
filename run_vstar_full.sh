@@ -37,7 +37,9 @@
 #   (7) 2026-08-13 step35 OOM 复盘（第二次同型崩溃，越修越晚崩=池碎片累积临界点）：
 #       post-fwd free 7.5G → post-bwd free 0.11G（backward 瞬态吃 7.4G：FP32 unshard/reduce 翻倍 + cast 674MiB），
 #       且 reserved 31.3G→36.7G 跨步膨胀（optimizer step 后不还池，每步累积碎片）。
-#       修复 a：fsdp_config.mixed_precision 全 bf16（param/reduce/buffer，原 reduce_dtype 默认 fp32 → unshard/reduce 瞬态减半）；
+#       修复 a：fsdp_config.mixed_precision.reduce_dtype=bf16（原默认 fp32 → unshard/reduce 瞬态减半；
+#       2026-08-13 20:00 修正：只显式 reduce_dtype，param/buffer 保持隐式默认——全项显式 bf16 曾致 FSDP 初始化 OOM，
+#       排查后确认 reduce 单项即可达瞬态减半目标，且不触碰 param/buffer 路径）。
 #       修复 b：dp_actor._optimizer_step 前 + update_actor 循环后 torch.cuda.empty_cache()（每步还池，防跨步膨胀）。
 #       梯度 reduce 精度 bf16：8B RL 常规选项，与 Adafactor bf16 状态一致。
 # 注意：total_epochs=30，实际步数 = 滤超长后样本数/8 × 30（171 条全量≈640 步；滤掉>5120 后约 120-140 条≈450-520 步）
@@ -85,9 +87,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     +actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
-    +actor_rollout_ref.actor.fsdp_config.mixed_precision.param_dtype=bf16 \
     +actor_rollout_ref.actor.fsdp_config.mixed_precision.reduce_dtype=bf16 \
-    +actor_rollout_ref.actor.fsdp_config.mixed_precision.buffer_dtype=bf16 \
     actor_rollout_ref.actor.checkpoint.contents=['model','hf_model','optimizer','extra'] \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.rollout.name=vllm \
