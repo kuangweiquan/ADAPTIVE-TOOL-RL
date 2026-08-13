@@ -33,6 +33,7 @@ class ATRConfig:
     iou_threshold: float = 0.5
     text_sim_threshold: float = 0.85
     frame_time_threshold: float = 1.0  # seconds
+    cost_call_budget: int = 3          # C 项调用预算:超出部分每调用 0.2 惩罚
 
     verbose: bool = False
 

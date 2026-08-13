@@ -13,6 +13,7 @@ import json
 
 from ..reward import AdaptiveToolReward
 from ..config import ATRConfig
+from ..tools import registry
 
 
 # —————————————————————————————————————
@@ -50,7 +51,10 @@ def parse_tool_trajectory(response_str: str) -> List[Dict[str, Any]]:
             call_data = call_data[0] if call_data else {}
         if not isinstance(call_data, dict):
             continue
-        record = {"tool_name": call_data.get("name", "unknown")}
+        raw_name = str(call_data.get("name", "unknown")).lower()
+        # 单一真值源:alias(如 zoom_in)→规范名(zoom),奖励层按规范名匹配。
+        # 未注册工具名保持原样,让 cost 的检测器决定如何处理。
+        record = {"tool_name": registry.canonical(raw_name) or raw_name}
         args = call_data.get("arguments", {})
         if isinstance(args, dict):
             if "bbox_2d" in args:

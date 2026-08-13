@@ -25,6 +25,9 @@ def _clamp_bbox(bbox_2d, w: int, h: int):
 
 class CropTool(VisualTool):
     name = "crop"
+    # AdaTooler-V 的 crop_image / crop_image_normalized 语义同为"按 bbox 取区域回显",
+    # 注册为 alias 后其轨迹可被 reward 层按规范名匹配(拼接消融用)。
+    aliases = ("crop_image", "crop_image_normalized")
     description = "Crop a region of the image to examine details."
     parameters = {
         "bbox_2d": {

@@ -34,6 +34,7 @@ class AdaptiveToolReward:
             iou_threshold=self.config.iou_threshold,
             text_sim_threshold=self.config.text_sim_threshold,
             frame_time_threshold=self.config.frame_time_threshold,
+            call_budget=self.config.cost_call_budget,
         )
         self.sequence_evaluator = SequenceQuality()
 
@@ -104,11 +105,16 @@ class AdaptiveToolReward:
         #  3. Cost C
         # ————————————
         if self.config.enable_cost and tool_calls:
-            cost_scores = self.cost_evaluator.compute(tool_calls)
+            cost_scores, cost_stats = self.cost_evaluator.compute_with_stats(tool_calls)
             C = self.cost_evaluator.aggregate(cost_scores)
         else:
+            cost_scores, cost_stats = [], {}
             C = 0.0
         components["cost"] = C
+        # 静默奖励死亡诊断:每类检测器的触发次数进 components,训练期按步聚合
+        for stat_key in ("dup_spatial", "dup_ocr", "oscillation",
+                         "consecutive_same", "call_budget"):
+            components[f"cost_{stat_key}"] = cost_stats.get(stat_key, 0)
 
         # ————————————
         #  4. Sequence S  (AdaReasoner-inspired)
