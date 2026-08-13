@@ -45,6 +45,7 @@ export NCCL_SHM_DISABLE=1   # 双禁后走 Socket transport
 # 注意: 不要设 PYTORCH_CUDA_ALLOC_CONF=expandable_segments —— vLLM 0.11 CuMemAllocator 不兼容
 # 注意: 注释行不能插在 python3 命令的 `\` 续行链中间（会断链），只能放这里或命令之前
 # 冒烟实测单次 ckpt ~29G，25 次 ≈725G 会写爆数据盘 → max_actor_ckpt_to_keep=2 只留最近 2 个
+# save_freq=5（2026-08-13 晚改，step28 OOM 教训：中断最大损失 10 步→5 步；ckpt 仍只留 2 个控盘）
 PROJECT_NAME="vstar_atr"
 EXPERIMENT_NAME="qwen3vl_8b_sftv2_grpo_4gpu"
 mkdir -p /root/code/logs
@@ -104,7 +105,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
-    trainer.save_freq=10 \
+    trainer.save_freq=5 \
     +trainer.num_examine=50 \
     +reward_model.reward_kwargs.atr_config_dict.verbose=true \
     trainer.max_actor_ckpt_to_keep=2 \
