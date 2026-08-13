@@ -262,3 +262,38 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
 | 3 | `critic/acc/acc_of_this_batch` | 出现非 0 值 | 停——模型学不会作答，可能模板/分布偏移 |
 
 监控命令：`grep -E "pg_loss|tool_call_mean|acc_of_this_batch|\[ATR\] acc" logs/qwen3vl_8b_sftv2_grpo_4gpu.log | tail`
+
+---
+
+## 回报 6（2026-08-13，全量启动 OOM 根因与修复：梯度跨 micro 累积超限）
+
+> 全量实际启动后连续两次在 **step 2 的 update_policy backward OOM**（`_cast_grad_to_param_dtype` 分配 674 MiB 失败，in use 23.0G/23.57G）。per-process 探针（每 5 秒 nvidia-smi）完整捕获后确诊，**不是偶发，是账本结构性漏算**。
+
+### 根因（探针实测，step 2 微批循环逐帧显存）
+
+| micro | 显存 | 构成 |
+|-------|------|------|
+| 第 1 个 post-fwd | ~15G | 基座 8.9G + 临时（logits 分块/激活） |
+| 第 2-3 个 post-fwd | 20.3→23.4G | + 梯度逐步累积（每个 backward +~2G） |
+| 第 4 个 post-fwd | 23.9G | 基座 8.9 + 梯度 6G + 临时 |
+| 第 4 个 backward | **>23.57G 崩** | + grad cast 674M + 新梯度 |
+
+- **基座 8.9G/卡** = 参数 bf16 分片 4.02 + 视觉 0.36 + **Adafactor 状态 bf16 分片 4.02**（实测验证：torch Adafactor 状态随参数 dtype，`variance` 为 bf16 —— **06 回报 4 账本把状态按 fp32 记 8.04G，高估 4G**）+ CUDA context ~0.5
+- **梯度 fp32 分片满 8.04G** 是跨 micro batch 逐步累积的（`zero_grad` 在 mini_batch 层，ppo_trainer 语义），**账本只算了「梯度常驻」没算「梯度累积 + 微批临时并存」** —— 第 4 个 micro 峰值 = 基座 8.9 + 梯度满 8.04 + 临时 ~4.3 ≈ 23.9G > 23.57G，**必然崩**
+- 附带确认：**`ppo_max_token_len_per_gpu` 对多模态样本无效**（dp_actor update_policy 的 `has_multi_modal_inputs` 分支按样本切分，dynamic bsz 分支被绕过）——两次 OOM 的 `allocated 35.82G` 分毫不差就是证据，3072→2048 改动无效
+
+### 修复（已入库，正在验证）
+
+`run_vstar_full.sh`：`ppo_mini_batch_size 4 → 2` → 梯度只累积 2 个 micro（满 4.02G）→ 峰值预算 ≈ 基座 8.9 + 梯度 4.02 + 临时 4.3 ≈ **17.2G < 23.57G（余 6G）**。
+- 训练语义影响：GRPO 每步 rollout 仍 32 条，仅每次 update 的梯度来自 2 条样本（原 4 条），梯度噪声 ×√2，可接受
+- 实测效果：step 1 通过（306s/步，比 335s 略快）、**step 2 通过（历史崩点清除）**、训练段 GPU ~17G 与预测吻合
+- 账本修正后注释已同步（06 回报 4 的 22.4G 峰值 → 实际 23.9G 会崩，原因如上）
+
+### 已验证通过
+
+- step 1/2 均无 OOM，`timing_s/step` 306s，GPU ~17G/卡
+- vLLM seed 固定 → rollout 确定性复现（step 1 指标与首轮逐位相同，非日志残留）
+
+### 待验证（50 步止损三门槛，07 本地决策 2）
+
+继续监控 step 5/10/50：pg_loss 下降趋势 + tool_call_mean > 0.5 + acc_of_this_batch 离开 0（step 1 已见 15.6%）。
