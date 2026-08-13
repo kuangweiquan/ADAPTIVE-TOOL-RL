@@ -186,7 +186,7 @@ class TaskRunner:
         reward_kwargs = dict(config.reward_model.get("reward_kwargs", {}))
         reward_fn = reward_manager_cls(
             tokenizer=tokenizer,
-            num_examine=0,
+            num_examine=config.trainer.get("num_examine", 0),
             compute_score=compute_score,
             reward_fn_key=config.data.reward_fn_key,
             **reward_kwargs,

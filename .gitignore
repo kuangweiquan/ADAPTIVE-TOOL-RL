@@ -25,6 +25,8 @@ experiments/results/*
 # Logs
 log/*
 !log/.gitkeep
+logs/
+outputs/
 
 # Checkpoints
 *.pt
@@ -46,6 +48,7 @@ datasets/vstar_bench/sft_v1_backup/
 
 # Large transfer bundles
 *.tar.gz
+*.zip
 
 # Caches
 .cache/

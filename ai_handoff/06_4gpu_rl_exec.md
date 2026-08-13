@@ -174,3 +174,91 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
 - **收敛差异**：beta2_decay=-0.8（decay 0.8）vs AdamW beta2=0.999，二阶矩衰减快；GRPO 首轮训练观察 loss/reward，若异常回退 `name: adamw`（yaml 一行）
 - checkpoint 的 optimizer state 保存/恢复（FSDPCheckpointManager）对 Adafactor 通用（标准 torch state_dict）
 - 训练启动前 `grep -E "Total steps|pg_loss|\[ATR\] acc|OutOfMemory" logs/qwen3vl_8b_sftv2_grpo_4gpu.log`；首轮 step 是关键（此前从未跑过 step 阶段）
+
+---
+
+## 回报 5（2026-08-13，本地决策前置动作②：processor_config.json 全文入库）
+
+> 文件：`/root/autodl-tmp/models/Qwen3-VL-8B-ATR-SFT-v2/processor_config.json`
+> 修改内容（相对 Qwen3-VL-8B 官方原版，仅 `image_processor.size` 一处）：`longest_edge 16777216 → 1003520`、新增 `shortest_edge: 3136`（≈1M 像素预算，与 SFT `max_image_size: 1024` 同量级；video_processor 未动）。
+> 作用：Qwen2VLImageProcessorFast 按像素预算缩放 → 视觉 token 全样本从 9964-32400 降到 3696-3900，是 4 卡 OOM 根因修复（见回报 3 ①）。**vLLM 采样端 + FSDP 训练端共用此 processor，一处改两处生效。**
+> 注意：此文件不进 git，换实例/重装模型后按下方全文重新打补丁（对照 02_env_setup.md 环境清单）。
+
+```json
+{
+  "image_processor": {
+    "do_convert_rgb": true,
+    "do_normalize": true,
+    "do_rescale": true,
+    "do_resize": true,
+    "image_mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "image_processor_type": "Qwen2VLImageProcessor",
+    "image_std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "merge_size": 2,
+    "patch_size": 16,
+    "resample": 3,
+    "rescale_factor": 0.00392156862745098,
+    "size": {
+      "longest_edge": 1003520,
+      "shortest_edge": 3136
+    },
+    "temporal_patch_size": 2
+  },
+  "processor_class": "Qwen3VLProcessor",
+  "video_processor": {
+    "do_convert_rgb": true,
+    "do_normalize": true,
+    "do_rescale": true,
+    "do_resize": true,
+    "do_sample_frames": true,
+    "fps": 2,
+    "image_mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "image_std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "max_frames": 768,
+    "merge_size": 2,
+    "min_frames": 4,
+    "patch_size": 16,
+    "resample": 3,
+    "rescale_factor": 0.00392156862745098,
+    "return_metadata": false,
+    "size": {
+      "longest_edge": 25165824,
+      "shortest_edge": 4096
+    },
+    "temporal_patch_size": 2,
+    "video_processor_type": "Qwen3VLVideoProcessor"
+  }
+}
+```
+
+### 本轮代码变更（前置动作①：reward 分解打印，已入库）
+
+- `pyvision-rl/verl_agents/verl/trainer/main_ppo.py`：`num_examine=0` 硬编码 → `config.trainer.get("num_examine", 0)`（默认 0 不变，命令行可开）
+- `run_vstar_full.sh`：新增两行 → `trainer.num_examine=50`（patch_reward 的 `[ATR] acc=... U=... C=... S=... → R=` 门控）+ `reward_model.reward_kwargs.atr_config_dict.verbose=true`（base_reward 每次 compute 都打）
+- 已 CPU 验证：`ATRConfig(**{"lambda_u": 1.0, "gamma_c": 0.5, "eta_s": 0.3, "verbose": True})` 构造通过
+
+### 全量启动后监控（50 步止损三门槛，07 本地决策 2）
+
+| # | 指标 | 通过线 | 不满足 → 停 |
+|---|------|--------|-------------|
+| 1 | `actor/pg_loss` | 下降趋势（非恒定/发散） | 停，回报 loss 曲线 |
+| 2 | `agent/tool_call_mean` | 保持 > 0.5 | 停——U/C/S 信号消失 |
+| 3 | `critic/acc/acc_of_this_batch` | 出现非 0 值 | 停——模型学不会作答，可能模板/分布偏移 |
+
+监控命令：`grep -E "pg_loss|tool_call_mean|acc_of_this_batch|\[ATR\] acc" logs/qwen3vl_8b_sftv2_grpo_4gpu.log | tail`

@@ -58,6 +58,8 @@ ls /root/autodl-tmp/models/Qwen3-VL-8B-Instruct   # 确认 config.json + safeten
 
 > 镜像失败时试：`pip install modelscope && modelscope download --model Qwen/Qwen3-VL-8B-Instruct --local_dir ...`
 
+> ⚠️ **模型目录 `processor_config.json` 已修改（勿回退）**：`size` 从 `longest_edge=16777216`（16M 像素≈无限制）改为 `longest_edge=1003520, shortest_edge=3136`（≈1M 像素，与 SFT `max_image_size: 1024` 同量级）。此修复是 4 卡视觉 token OOM 的根因解决方案，只存在于远端模型目录、不进 git——**换实例/重装模型后必须重新打这个补丁**，否则 RL 视觉 token 每样本 9964-32400、必然 OOM。改前先 `git diff` 对比 06 文档「回报 5」里的标准内容。
+
 ## Step 5：注册 SFT 数据集
 
 ```bash
