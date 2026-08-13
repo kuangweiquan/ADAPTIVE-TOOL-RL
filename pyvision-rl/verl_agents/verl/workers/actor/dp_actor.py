@@ -268,6 +268,9 @@ class DataParallelPPOActor(BasePPOActor):
         # 4x24G: optimizer state (AdaFactor ~4G) stays on CPU during the backward
         # phase of the micro-batch loop; load it right before step() and offload
         # right after, so each backward sees the smallest possible footprint.
+        # 2026-08-13 step35 OOM 复盘: backward 循环后池内碎片不归还, load 4G 状态前先还池,
+        # 否则 post-bwd free~0.1G 时 4G 加载必崩 (显存账 (7) 修复 b).
+        torch.cuda.empty_cache()
         load_fsdp_optimizer(optimizer=self.actor_optimizer, device_id=torch.cuda.current_device())
 
         if isinstance(self.actor_module, FSDP):
@@ -283,6 +286,9 @@ class DataParallelPPOActor(BasePPOActor):
             self.actor_optimizer.step()
 
         offload_fsdp_optimizer(optimizer=self.actor_optimizer)
+        # 2026-08-13: 还池防跨步膨胀 (显存账 (7) 修复 b) — optimizer step 的瞬态
+        # (unshard/reduce 碎片) 不归还则 reserved 每步累积 31.3G→36.7G, 物理 free 贴 0 崩
+        torch.cuda.empty_cache()
         return grad_norm
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
