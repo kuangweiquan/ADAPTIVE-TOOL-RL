@@ -29,6 +29,7 @@ import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, kl_penalty, compute_policy_loss_with_filter_mask
 from verl.utils.debug import GPUMemoryLogger
+from verl.utils.fsdp_utils import load_fsdp_optimizer, offload_fsdp_optimizer
 from verl.utils.py_functional import append_to_dict
 from verl.utils.seqlen_balancing import get_reverse_idx, rearrange_micro_batches
 from verl.utils.torch_functional import logprobs_from_hidden, logprobs_from_logits
@@ -264,6 +265,11 @@ class DataParallelPPOActor(BasePPOActor):
     def _optimizer_step(self):
         assert self.config.grad_clip is not None
 
+        # 4x24G: optimizer state (AdaFactor ~4G) stays on CPU during the backward
+        # phase of the micro-batch loop; load it right before step() and offload
+        # right after, so each backward sees the smallest possible footprint.
+        load_fsdp_optimizer(optimizer=self.actor_optimizer, device_id=torch.cuda.current_device())
+
         if isinstance(self.actor_module, FSDP):
             grad_norm = self.actor_module.clip_grad_norm_(max_norm=self.config.grad_clip)
         else:
@@ -275,6 +281,8 @@ class DataParallelPPOActor(BasePPOActor):
             self.actor_optimizer.zero_grad()
         else:
             self.actor_optimizer.step()
+
+        offload_fsdp_optimizer(optimizer=self.actor_optimizer)
         return grad_norm
 
     @GPUMemoryLogger(role="dp actor", logger=logger)

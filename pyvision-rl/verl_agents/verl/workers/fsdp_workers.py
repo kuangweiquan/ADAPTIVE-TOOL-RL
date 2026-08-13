@@ -547,8 +547,9 @@ class ActorRolloutRefWorker(Worker):
         assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
-        if self._is_offload_optimizer:
-            load_fsdp_optimizer(optimizer=self.actor_optimizer, device_id=torch.cuda.current_device())
+        # NOTE(4x24G): optimizer state is NOT loaded here anymore. dp_actor._optimizer_step
+        # loads it right before step() and offloads right after, keeping it off-GPU
+        # during the micro-batch backward phase (peak saver: ~4G on 24G cards).
 
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)

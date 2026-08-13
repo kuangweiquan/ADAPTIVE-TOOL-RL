@@ -297,3 +297,53 @@ setsid nohup bash run_vstar_full.sh > /dev/null 2>&1 < /dev/null &
 ### 待验证（50 步止损三门槛，07 本地决策 2）
 
 继续监控 step 5/10/50：pg_loss 下降趋势 + tool_call_mean > 0.5 + acc_of_this_batch 离开 0（step 1 已见 15.6%）。
+
+## 回报 7（2026-08-13，OOM 结构性修复定稿：优化器状态延迟加载，step 1-5 全过）
+
+### 演进结论：mini_batch 4→2→1 只是推迟崩溃
+
+| 配置 | 崩溃点 | 观察 |
+|------|--------|------|
+| mini_batch=4 | step 1（原始） | 梯度 8.04G 满额 + 基座 = 必然超限 |
+| mini_batch=2 | step 3 | 梯度 4.02G，但样本 real nnz 波动（1901-2762）决定生死 |
+| mini_batch=1 | step 5 | 每步 2 个 mini_batch 各 1 micro，峰值仅随样本波动 |
+| **状态延迟加载** | **step 5+ 全过** | 见下 |
+
+### 最终根因（代码级）
+
+`fsdp_workers.update_actor` 在 backward 前就把 **Adafactor 状态（bf16 分片 4.02G/卡）load 回 GPU**，
+backward 全程驻留 → 峰值 = 基座(参数 4.02+视觉 0.36+context 0.5) + 梯度 2.01 + **状态 4.02** + 激活/临时 ≈ 23.3G，
+贴 23.57G 物理极限，样本一波动（nnz 2762）即崩。
+
+### 修复（代码级，训练语义零变化）
+
+把状态搬运时机从「backward 前」挪到「step 前」：
+- `dp_actor.py`：`_optimizer_step` 内 step() 前 `load_fsdp_optimizer`、step() 后立即 `offload_fsdp_optimizer`
+  （每 mini_batch 一次 load→step→offload；PCIe 开销 ~0.7s/step，可忽略）
+- `fsdp_workers.py`：删除 update_actor 开头的 `load_fsdp_optimizer`（551 行）
+- 效果：backward 峰值期状态在 CPU（省 4.02G），step 峰值期激活已释放（状态 4.02G 放得下）
+
+### 验证（2026-08-13 第 5 次启动，mini_batch=1 + 状态延迟加载）
+
+- **step 1-5 全部通过，0 OOM**（历史崩点 step 3 / step 5 均清除）
+- 训练段物理占用 17-18G/卡（修复前 23.3G），post-bwd free 最低 5.1G（修复前 0.5G 崩）
+- rollout 段峰值最高 21.9G（vLLM，sleep 后回落 16G）
+- 节奏 ~306-330s/步
+
+### 三指标（step 1-5，50 步止损三门槛初判）
+
+| step | pg_loss | acc_of_this_batch | tool_call_mean |
+|------|---------|-------------------|----------------|
+| 1 | -0.241 | 0.156 | 5.60 |
+| 2 | +0.400 | 0.188 | 5.95 |
+| 3 | +0.280 | 0.188 | 5.83 |
+| 4 | -0.250 | 0.188 | 6.42 |
+| 5 | -0.108 | 0.062 | 6.50 |
+
+- pg_loss 波动（-0.25~+0.40）无单调恶化趋势 ✓
+- tool_call_mean 5.6-6.5 远超 0.5 ✓（8 轮 max_turns 内用完是正常初始态）
+- **acc 离开 0**：0.156-0.188 稳定非零 ✓（step 5 回落 0.062 为样本波动，继续观察）
+
+### 待验证
+
+继续监控 step 10/25/50：pg_loss 趋势 + acc 是否保持离开 0 + checkpoint（save_freq=25）落地。
