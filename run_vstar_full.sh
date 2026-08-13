@@ -27,7 +27,8 @@
 #       换 Adafactor（yaml actor.optim.name=adafactor，状态 1x = 8.0G/卡）：
 #       step 峰值 ≈ 参数 4.4 + 梯度 8.0 + 状态 8.0 + 临时 ~2 = 22.4G < 23.57G ✓（余量 ~1.2G）。
 #       2 卡 Mini 同构验证：AdamW round1 step OOM(24.4G)，Adafactor 两轮全通过(峰值 20.8G)。
-#   rollout 段：权重 4.3 + KV（max_num_batched_tokens 8192）实测 17.2G < 0.6×23.57=14.1G 预算上限。
+#   rollout 段：权重 4.3 + KV（max_num_batched_tokens 8192）实测 17.2G > 0.6×23.57=14.1G 预算上限，
+#       2026-08-13 改 0.5（KV 池上限 11.79G，配合 vllm sleep 权重 offload 保证训练段余量 ≥ 8.6G 刚需）。
 # 注意：total_epochs=30，实际步数 = 滤超长后样本数/8 × 30（171 条全量≈640 步；滤掉>5120 后约 120-140 条≈450-520 步）
 set -x
 source /root/miniconda3/etc/profile.d/conda.sh
@@ -81,7 +82,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.max_model_len=14336 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.agent.activate_agent=True \
     actor_rollout_ref.rollout.agent.tool_name_key=env_name \
@@ -97,7 +98,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
-    trainer.save_freq=25 \
+    trainer.save_freq=10 \
     +trainer.num_examine=50 \
     +reward_model.reward_kwargs.atr_config_dict.verbose=true \
     trainer.max_actor_ckpt_to_keep=2 \
