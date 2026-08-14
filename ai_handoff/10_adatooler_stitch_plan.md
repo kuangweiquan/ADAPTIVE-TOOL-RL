@@ -157,3 +157,22 @@
 
 - **No-fabrication**: 本文件所有数值为 TBD 或论文报告值（89.8%/78.5% 标注来源 arXiv:2512.16918）
 - **Next CCFA owner**: Phase 3 结果回收后 → ccf-integrity-auditor（数字与主张一致性）；写作阶段 → ccf-paper-writer
+
+---
+
+## 16. 远端回报（Phase 0 完成，2026-08-14，本地 SSH 直连执行）
+
+**执行方式变更**：用户批准本地 AI 经 `ssh ATR` 直连远端执行（替代远端 AI 交接循环，CLAUDE.md 已更新）。
+
+**资产落地（全部在 `/root/autodl-tmp/`）**：
+- `models/AdaTooler-V-SFT-model`：16.6GB，safetensors 校验 ALL_OK（729 tensors）。7B gated，用户决定跳过（上界用论文值 89.8%）
+- `datasets/adatooler_v_subset/`：2900 train + 100 val parquet（verl-tool 格式），单图 MCQ，来源 Spatial_Image + General_Image（候选 11,015，seed 42 水库采样）；图片 100% 唯一（源数据 150 个重复 problem_id 用行号命名隔离）
+- `datasets/AdaTooler-V-300k/`：rl.json + rl_with_deltaS.json（15k 条官方 ΔS 表，本子集命中仅 204 → **Arm D 用自算 ΔS**（delta_s_precompute.py），官方表作对照）
+- `datasets/vstar_official/`：官方 191 图 + test_questions.jsonl（答案 label）
+- `adatooler_v_review/`：官方仓库 clone；verl-tool env 建于 `/root/autodl-tmp/envs/verl-tool`（conda clone atr + editable 安装 + 补依赖 math_verify/mathruler/jiwer/rouge_score/qwen_omni_utils + `llm_agent`→`agent_loop` shim + transformers 4.57.6）；全链 import OK（reward/tool server/agent loop/trainer），tool server 冒烟 /docs 200
+
+**Gate 0 判定：PASS** —— 锚点 acc = **149/191 = 78.0%**（direct_attributes 78.3% / relative_position 77.6%，随机 33%）；子集提取 ✓；环境 import ✓。
+
+**已知坑（写进过程以防踩回）**：无卡模式 cgroup 内存上限 2GB（全局共享，必须串行）；两个 HF 仓库走 Xet 存储（匿名 `hf download` 401 → `HF_HUB_DISABLE_XET=1` 或直连 curl/aria2）；300k 图片存类别 zip（内部前缀 `home/sig95vg/remote_data/wangcy/`）；hf download 多个 `--include` 标志会互相覆盖（须单标志多值）；transformers 4.57.2 本地 Qwen2.5-VL tokenizer 加载 bug（钉 4.57.6）。
+
+**Phase 2 就绪**：`experiments/adatooler_stitch/train_arm_a_4x3090.sh`（Arm A 纯 acc，batch32/n4/prompt8k/TP1/gmem0.5/save10/150 步/console，等 4×3090 开机）。
