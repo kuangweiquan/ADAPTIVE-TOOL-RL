@@ -259,13 +259,14 @@ def main():
         fetcher._cat_zip_paths(c)
     print(f"categories: {cats}", flush=True)
 
-    def fetch_row(r):
+    def fetch_row(r, i):
         qid = str(r.get("problem_id", 0))
         rel_paths = norm_paths(r["path"])
         abs_paths, ok_all = [], True
         for j, rel in enumerate(rel_paths):
             ext = Path(rel).suffix.lower() or ".jpg"
-            img_name = f"{qid}_{j}{ext}" if len(rel_paths) > 1 else f"{qid}{ext}"
+            # row index keeps filenames unique even when source problem_id duplicates
+            img_name = f"{qid}_{i}_{j}{ext}" if len(rel_paths) > 1 else f"{qid}_{i}{ext}"
             if fetcher.fetch(rel, img_dir / img_name):
                 abs_paths.append((img_dir / img_name).absolute().as_posix())
             else:
@@ -298,7 +299,7 @@ def main():
 
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=8) as ex:
-        rows = [x for x in ex.map(fetch_row, reservoir) if x is not None]
+        rows = [x for x in ex.map(lambda t: fetch_row(t[1], t[0]), enumerate(reservoir)) if x is not None]
 
     fetched = sum(len(r["extra_info"]["images"]) for r in rows)
     failed = len(reservoir) - len(rows)
