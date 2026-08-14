@@ -1,11 +1,11 @@
 # CLAUDE.md — PyVision-ATR 项目协作规范
 
-> 本文件由**本地 AI** 与**远端 GPU AI** 共同阅读。先判定自己是谁：
+> 本文件由**本地 AI** 与**远端 AI（可选后备）**共同阅读。先判定自己是谁：
 >
-> - **本地 AI（Windows 开发机）**：用户面前的机器，**无 GPU**，禁止一切 GPU 负载 → 按「本地职责」执行
-> - **远端 AI（GPU 服务器，AutoDL/SeetaCloud）**：跑训练与评测的机器，环境见 `ai_handoff/02_env_setup.md` → 按「远端职责」执行
+> - **本地 AI（Windows 开发机）**：用户面前的机器，**无 GPU**，禁止本机一切 GPU 负载 → 按「本地职责」执行；GPU 任务经 **`ssh ATR` 直连远端**执行
+> - **远端 AI（GPU 服务器上运行的 AI，可选后备）**：仅当本地 AI 离线时按交接文档执行并回报；环境见 `ai_handoff/02_env_setup.md`
 >
-> 用户负责两端的物理搬运（数据包、网盘）。沟通载体 = **GitHub 仓库 + `ai_handoff/` 交接文档**。
+> 沟通载体 = **GitHub 仓库 + `ai_handoff/` 交接文档**；本地与远端之间靠 SSH/SCP 直连，用户只负责实例开关与大文件物理搬运。
 
 ## 项目一句话
 
@@ -17,17 +17,26 @@ RL 集成已完成（VStarToolEnv + patch_reward + vstar→verl parquet + comput
 
 | 端 | 机器 | 做什么 | 绝不做什么 |
 |----|------|--------|-----------|
-| 本地 | Windows 开发机（无 GPU） | 写代码；改 tools/reward/adapter；**CPU 冒烟测试**（`experiments/scripts/smoke_*.py`）；SFT 数据过滤/检查；vstar→verl parquet 转换（纯 CPU）；写 `ai_handoff/` 交接文档；git 提交推送 | **一切 GPU 负载**：模型推理/训练/评测（`run_atr_offline.py`、vLLM、verl、torchrun、deepspeed、`nvidia-smi` 等）。`.claude/settings.local.json` 已配置 deny 拦截，不要绕过。也不直接 SSH 连远端（用户托管） |
-| 远端 | GPU 服务器 | SFT/RL 训练；vLLM 服务；`run_atr_offline.py` 评测；模型合并导出；按交接文档执行并回报结果 | 不删改本地需要的源码与数据（远端是执行端，成果回写交接文档 + push） |
+| 本地 | Windows 开发机（无 GPU） | 写代码；改 tools/reward/adapter；**CPU 冒烟测试**（`experiments/scripts/smoke_*.py`）；SFT 数据过滤/检查；vstar→verl parquet 转换（纯 CPU）；写 `ai_handoff/` 交接文档；git 提交推送；**SSH 直连远端（`ssh ATR`，密钥免密）**：同步代码、启动/监控训练、scp 数据、读日志 | **本机一切 GPU 负载**（`run_atr_offline.py`、vLLM、verl、torchrun、deepspeed、`nvidia-smi` 等；`.claude/settings.local.json` 已配置 deny 拦截，不要绕过）。GPU 命令只能经 `ssh ATR` 发往远端执行 |
+| 远端 | GPU 服务器（SeetaCloud，`ssh ATR` 可达） | 执行本地经 SSH 下发的命令：SFT/RL 训练、vLLM 服务、评测、模型合并导出；长任务 nohup/screen 分离自跑 | GPU 开关由用户控制台操作；关机≠释放，权重回传本地验证前绝不释放 |
+| 远端 AI | GPU 服务器上运行的 AI | **可选后备**：仅当本地 AI 离线/无网络时，按交接文档执行并回报 | 不再承担日常执行角色 |
 
-## 协作流程（每轮远端任务）
+## 协作流程（本地 SSH 直连远端）
 
-1. 本地把任务写成编号交接文档 `ai_handoff/0N_主题.md`（格式：背景 → 当前进度 → Step 0 诊断 → 具体命令 → 回报要求），commit + push
-2. 用户把代码/数据带到远端（远端 `git pull` + 数据包搬运）
-3. 远端 AI 执行交接文档 → 结果（指标、产物路径、问题）写回报节，尽量 push 回仓库（无凭据则回报给用户）
-4. 本地 pull，结论整理进 `knowledge-base/`，进入下一轮
+1. 本地写代码 + CPU 冒烟 → commit + push
+2. `ssh ATR 'cd /root/code && git pull'` 同步代码；不进 git 的数据（图片/parquet/ckpt）用 scp/rsync 搬运
+3. 本地经 SSH 启动训练（**必须 nohup/screen 分离**：本地 Bash 单命令 ≤10 分钟，长任务靠远端分离自跑）→ 轮询日志/指标 → 回改
+4. 关键结论仍写 `ai_handoff/` 回报节 + `knowledge-base/` 归档（保留记录习惯）
 
 当前阶段 = `ai_handoff/` 最新编号文档；`knowledge-base/` 是方案事实源（`SFT_TRAIN_README.md` 训练手册、`TOOL_SUMMARY.md` 工具接口、`REFERENCES.md` 引用映射）。
+
+## SSH 远端速查
+
+- 连接：`ssh ATR`（`~/.ssh/config` Host ATR → connect.nmb2.seetacloud.com:25419，密钥认证）
+- 远端环境：conda env `atr`（`/root/miniconda3/envs/atr`）、工作目录 `/root/code`、数据盘 `/root/autodl-tmp`
+- **远端任何外网操作（git/pip/HF）前先 `source /etc/network_turbo`**（只加速 github/huggingface，会拖慢其他站点）
+- 远端有 nohup/screen/rsync，**无 tmux**
+- GPU 开机/无卡模式切换由用户在控制台操作；无卡模式仍可 SSH 传文件、改代码、看盘
 
 ## Git 同步协议（GitHub）
 
@@ -54,6 +63,6 @@ push 被 PrePush hook 拒绝 = 有大数据/禁用路径混进提交，先 `git 
 
 ## 环境速查
 
-- 远端：conda env `atr`，工作目录 `/root/code`（详见 `ai_handoff/02_env_setup.md`）
+- 远端：conda env `atr`，工作目录 `/root/code`，SSH 直连 `ssh ATR`（详见 `ai_handoff/02_env_setup.md`）
 - 模型：Qwen3-VL-8B（SFT 后 `Qwen3-VL-8B-ATR-SFT`）
 - 数据：VStar 基准原始图 338 MB，走 `atr_project_bundle*.tar.gz` 数据包 / 网盘同步，不进 git
