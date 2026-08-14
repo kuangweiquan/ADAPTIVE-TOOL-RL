@@ -59,7 +59,7 @@ def main():
     img_dir = Path(args.images_dir)
     results, correct = [], 0
     for i, item in enumerate(items):
-        img = Image.open(img_dir / Path(item["image"]).name).convert("RGB")
+        img = Image.open(img_dir / item["image"]).convert("RGB")
         messages = [
             {"role": "user", "content": [
                 {"type": "image", "image": img},
