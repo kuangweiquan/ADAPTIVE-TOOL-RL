@@ -29,12 +29,16 @@ Step 1 启动 Arm A（在远端分离运行）：
   ssh ATR 'nohup bash /root/code/experiments/adatooler_stitch/train_arm_a_4x3090.sh > /root/autodl-tmp/arm_a_train.log 2>&1 < /dev/null &'
   注意：脚本内置 tool server 启动与 kill；日志含 NCCL INFO 噪音属正常
 
-Step 2 监控协议（关键）：
+Step 2 监控协议（关键，2026-08-14 修订：50 步硬判定替代直跑 150 步）：
   - 前 10 步密集盯：每 3-5 分钟 tail 一次 /root/autodl-tmp/arm_a_train.log，重点 grep -E "OOM|CUDA out|Error|Traceback|acc_of_this_batch|reward"
   - 显存基线：nvidia-smi 采样，单卡训练态应 ≤18G（offload+grad ckpt 已开）
-  - 稳定后每 20 步摘一次指标存档（reward 均值/acc/tool_call_mean/pg_loss），写进本文档「回报节」
-  - 150 步完成或任一步 OOM → 进入回报
-  - 停机条件（3 门同 08 文档口径）：step 50 时 pg_loss 无下行趋势 / tool_call_mean 趋势异常 / acc 长期 0
+  - 每 10 步摘一次指标存档（reward 均值/acc/tool_call_mean/pg_loss），写进本文档「回报节」
+  - 停机硬门（同 08 文档口径）：step 10 时 acc 仍长期 0 或 tool_call 异常（全 0 或打满）→ 停机回报；step 50 时 pg_loss 无下行趋势 → 停机回报
+  - 【Step-50 硬判定】训练到 50 步即停（~4-5h + 开销），用 50 步 ckpt 跑官方 191 题评测（anchor_eval.py，~45min，单卡）：
+    * ckpt acc ≥ 78% + 3 点 → Arm A 阳性，写回报后可决定 resume 至 150（verl-tool resume_mode=auto 从 default_local_dir 恢复）
+    * ckpt acc 在 78%±3 内 → 判定「纯 acc GRPO 在本基座无增益」，该结论本身即基线结果，转入 Arm B（同 50 步预算）
+    * 依据：每步 128 次 rollout，acc 单步噪声 σ≈3.7%；50 步平均可排除 >5 点的真实增益，足以支撑上述二分判定
+  - 150 步只在「50 步判定阳性」后用于最终数字，不再是默认路径
 
 Step 3 回报：把结果写进 ai_handoff/11 的「远端回报」节并 push；如遇 OOM 记录显存峰值与失败 step 号，不要擅自改显存参数，回报告。
 
