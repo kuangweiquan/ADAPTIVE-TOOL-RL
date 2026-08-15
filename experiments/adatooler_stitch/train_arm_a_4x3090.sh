@@ -23,7 +23,7 @@ term_orphans() {
     pids=$(pgrep -f "$1" 2>/dev/null)
     [ -n "$pids" ] || return 0
     kill $pids 2>/dev/null
-    sleep 8
+    sleep 25
     for p in $pids; do
         if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
     done
@@ -33,11 +33,25 @@ term_orphans "verl_tool.servers.serve"
 for p in $(pgrep -f "from multiprocessing.spawn import spawn_main"); do
     if [ "$(ps -o ppid= -p $p | tr -d ' ')" = "1" ]; then
         kill $p 2>/dev/null
-        sleep 2
+        sleep 20
         if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
     fi
 done
 sleep 3
+
+# --- verify GPUs are actually free before launching (zombie driver allocations from
+# SIGKILLed vLLM cores report as used and are not reclaimable on this platform;
+# launching into them wastes a full 15-min startup before vLLM's init check fails) ---
+FREE_OK=1
+for line in $(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader); do
+    idx=$(echo $line | cut -d, -f1)
+    used=$(echo $line | cut -d, -f2 | tr -dc '0-9')
+    if [ "$used" -gt 500 ]; then
+        echo "WARN: GPU $idx still shows ${used} MiB used -> zombie allocation; aborting launch (reboot needed)" >&2
+        FREE_OK=0
+    fi
+done
+[ "$FREE_OK" = "1" ] || exit 1
 
 train_data=/root/autodl-tmp/datasets/adatooler_v_subset/train.parquet
 val_data=/root/autodl-tmp/datasets/adatooler_v_subset/val.parquet
