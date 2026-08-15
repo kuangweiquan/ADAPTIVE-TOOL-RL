@@ -9,6 +9,10 @@
 #   raises ImportError at AutoConfig time; sdpa keeps the qwen3_vl torch-backend path (no FA2 kernels).
 #   gpu_mem_util 0.5->0.85 (08-15 fix): 0.5*24G=12G budget < ~16.1G bf16 weights (tp=1) -> vLLM init
 #   fails "No available memory for the cache blocks"; 0.85 leaves ~2.8G KV cache (~19k tokens).
+#   use_remove_padding True->False (08-15 fix): remove_padding=True makes verl install its
+#   fused FA2 attention patch (qwen2_vl_attn_forward), which needs real flash_attn kernels that
+#   this env deliberately lacks (flash_attn 0.0.0 stub, see 05_verl_env_precheck). False keeps the
+#   HF sdpa attention path (perf-only knob; masked padding tokens, same softmax for valid tokens).
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -131,7 +135,7 @@ PYTHONUNBUFFERED=1 python -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.model.target_modules=all-linear \
     actor_rollout_ref.actor.optim.lr=$lr \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
-    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.trust_remote_code=True \
     actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model'] \
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
