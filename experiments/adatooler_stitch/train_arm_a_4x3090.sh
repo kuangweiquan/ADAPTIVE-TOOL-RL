@@ -1,12 +1,14 @@
 #!/bin/bash
 # Arm A (plain acc GRPO, released-code fidelity) downscaled 8x80G -> 4x3090 24G.
 # Mirror of verltool/examples/train/adatooler_v/train_qwen25vl.sh with plan-10 changes:
-#   n_gpus 8->4, tensor_parallel 2->1, gpu_mem_util 0.8->0.5, batch 64->32, n 8->4,
+#   n_gpus 8->4, tensor_parallel 2->1, gpu_mem_util 0.8->0.85, batch 64->32, n 8->4,
 #   prompt/response/obs 16384->8192, save_freq 50->10, total_steps 150, logger console-only,
 #   local model/data paths, val_batch 512->100.
 #   + model.override_config.attn_implementation=sdpa: verl defaults to flash_attention_2 but this
 #   env ships a deliberate flash_attn stub (ver 0.0.0, see 05_verl_env_precheck) -> HF >=2.1.0 gate
 #   raises ImportError at AutoConfig time; sdpa keeps the qwen3_vl torch-backend path (no FA2 kernels).
+#   gpu_mem_util 0.5->0.85 (08-15 fix): 0.5*24G=12G budget < ~16.1G bf16 weights (tp=1) -> vLLM init
+#   fails "No available memory for the cache blocks"; 0.85 leaves ~2.8G KV cache (~19k tokens).
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -40,7 +42,7 @@ reward_manager=adatooler_v
 ppo_micro_batch_size_per_gpu=1
 log_prob_micro_batch_size_per_gpu=8
 tensor_model_parallel_size=1
-gpu_memory_utilization=0.5
+gpu_memory_utilization=0.85
 do_offload=True
 use_dynamic_bsz=False
 ulysses_sequence_parallel_size=1
