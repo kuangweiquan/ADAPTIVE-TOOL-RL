@@ -45,6 +45,36 @@ Step 3 回报：把结果写进 ai_handoff/11 的「远端回报」节并 push�
 红线：不改 reward 代码（Arm A 是保真基线）；不释放实例；权重/日志不进 git。
 ```
 
-## 3. 远端回报（待新会话填写）
+## 3. 远端回报（2026-08-15 填写：12 次启动诊断，训练未进 step 1，已交接 12 号文档）
 
-（空，待 Arm A 启动后填写：启动时间 / Step 0 诊断结果 / 前 10 步指标 / OOM 情况 / 最终 150 步指标表）
+启动时间：09:13（第 1 次）→ 11:45（第 16 次），共 16 次启动（3 次实例重启），**step 0 管线已全通**（rollout 128 轨迹 ~15s → compute_score → 存档 → log_prob），**唯一剩余阻塞 = 训练期引擎常驻显存冲突**（详见 12 号文档）。
+
+### 修复链（16 次启动逐个剥出的阻塞，全部已落地）
+
+| # | 阻塞 | 修复 | 载体 |
+|---|------|------|------|
+| 1 | HF FA2 版本门槛（verl 默认强制 `attn_implementation=flash_attention_2`，env flash_attn stub 0.0.0 撞 ≥2.1.0 校验） | `+actor_rollout_ref.model.override_config.attn_implementation=sdpa` | 脚本 |
+| 2 | Hydra struct 模式拒绝向空 dict 加键 | 加 `+` 前缀 | 脚本 |
+| 3 | vLLM 预算 0.5×24G=12G < 16.1G bf16 权重（tp=1）→ init 必败 | gmem 0.5→0.85（后因训练共存问题改回，见 #7） | 脚本 |
+| 4 | 开源 `adatooler_v.py:203` 无保护读 `turns_stats`/`valid_action_stats`（守卫误置于访问之后；全仓无写入者 → 唯一来源是他们 Rl_data 的列） | 数据补零列（值只喂注释掉的 add_additional_penalties，活跃奖励零影响） | parquet + prepare_subset.py |
+| 5 | 同上 `active_mask`（save-record 路径 `is_done=not active_mask`） | 数据补 True 列（只进存档） | parquet + prepare_subset.py |
+| 6 | save-record `json.dump` 撞 numpy（`extra_info.images` 经 pandas 往返变 ndarray） | `clean_extra_info.py` 递归清洗 + 新增脚本 | parquet + 新脚本 |
+| 7 | 存档文件多 worker 并发 read-modify-write 竞态（JSONDecodeError） | sitecustomize 加 json.load 退避重试（20 次，兜底 `[]`） | env sitecustomize |
+| 8 | 引擎 21.4G 常驻 vs 训练前向 logits 4.9G（16k×vocab）→ OOM | 先试 STANDALONE sleep 补丁（**失败，见 12 号 §2.3**）→ 改 tp=2+gmem=0.5（**仍 OOM，见 12 号 §2.4 探针计划**） | 未决 |
+| 9 | `_flash_use_top_left_mask` NameError（stub 令 is_flash_attn_2_available()=False → qwen2_vl.py 模块级 if 块整体跳过 → 全局未定义） | qwen2_vl.py 补 else 分支定义 3 个全局（=False，与 `_custom_flash_attention_forward` 默认一致） | vendored +6 行（**保留**） |
+| 10 | `flash_attn_varlen_func` NameError（remove_padding=True 触发 verl FA2 融合 attention 补丁，mrope 路径必调真内核） | `use_remove_padding=True→False`（走 HF sdpa；纯性能开关，奖励零影响） | 脚本 |
+| 11 | 脚本清理循环逐个 sleep 20s 串行化（16 孤儿 → 启动延迟 20+ 分钟） | 批量 SIGTERM + 单次等待 + 幸存者清扫 | 脚本 |
+| 12 | 僵尸显存堵卡时白等 15 分钟启动 | 清理后 nvidia-smi 验证，>500MiB 直接退出报错 | 脚本 |
+
+### 平台行为结论（重要，后续会话必读）
+
+- **驱动僵尸分配**：SeetaCloud + 驱动 570.124.04 上，vLLM engine worker 进程被杀死（SIGTERM/SIGKILL 均可）后，驱动常把其显存登记为存活客户端（`nvidia-smi --query-compute-apps` 可见 PID，`ps` 无此进程、NSpid 全扫无映射）。惰性回收**不更新记账**（14GB 探测分配成功但 nvidia-smi 仍报占用），vLLM 的 mem_get_info 预检过不去。**唯一解法 = 实例重启**（GPU 级重置，容器 uptime 不变）。已重启 3 次。
+- 反之，进程**自行退出**（如 init 失败自退）时内存干净释放。
+- **vLLM 0.11 sleep 模式空转**：`CuMemAllocator` 是孤儿单例——正常路径（权重/KV cache 走 torch 分配器）无人向它注册，`sleep(level=1)` 迭代空表零释放。verl 的 STANDALONE 分支本来就 skip sleep/wake，补丁试过无效已撤销。
+- 训练前向的 4.62G 单次分配 = 16k token × 151936 vocab × bf16 的 logits——引擎 16.1G 权重在 24G 卡上与训练共存需要分片或释放，无第三条路。
+
+### 未决事项 → 12 号文档
+
+- **tp=2+gmem=0.5 下引擎实测 21.28G/卡（与 tp=1+0.85 几乎相同）**——怀疑 verl_tool 的引擎架构未按 tp=2 分片或 cache 未按预算收缩。12 号文档给探针先行方案。
+- 最终参数组合待探针结果定夺。
+- ckpt：0 个（未进 step 1）；rl_ckpt/arm_a 为空。
