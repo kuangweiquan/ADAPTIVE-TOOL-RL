@@ -4,6 +4,9 @@
 #   n_gpus 8->4, tensor_parallel 2->1, gpu_mem_util 0.8->0.5, batch 64->32, n 8->4,
 #   prompt/response/obs 16384->8192, save_freq 50->10, total_steps 150, logger console-only,
 #   local model/data paths, val_batch 512->100.
+#   + model.override_config.attn_implementation=sdpa: verl defaults to flash_attention_2 but this
+#   env ships a deliberate flash_attn stub (ver 0.0.0, see 05_verl_env_precheck) -> HF >=2.1.0 gate
+#   raises ImportError at AutoConfig time; sdpa keeps the qwen3_vl torch-backend path (no FA2 kernels).
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -79,6 +82,7 @@ PYTHONUNBUFFERED=1 python -m verl_tool.trainer.main_ppo \
     reward_model.reward_manager=$reward_manager \
     reward_model.launch_reward_fn_async=True \
     actor_rollout_ref.model.path=$model_name \
+    actor_rollout_ref.model.override_config.attn_implementation=sdpa \
     actor_rollout_ref.model.use_shm=False \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.model.target_modules=all-linear \
