@@ -285,12 +285,15 @@ def main():
             "images": [{"image": p} for p in abs_paths],
             "ability": "visual_reasoning",
             "reward_model": {"style": "rule", "ground_truth": strip_answer(r["solution"])},
-            # released adatooler_v.py get_group_info() reads these two keys UNGUARDED (guard sits
-            # after the access). Their Rl_data ships them as columns; values are inert for the
-            # active reward (group_info's only consumer, add_additional_penalties, is commented
-            # out in the released code), so zeros keep Arm A reward semantics identical.
+            # released adatooler_v.py get_group_info() reads turns_stats/valid_action_stats
+            # UNGUARDED (guard sits after the access) and the save-record path reads active_mask;
+            # their Rl_data ships all three as columns. Values are inert for the active reward
+            # (group_info's only consumer, add_additional_penalties, is commented out in the
+            # released code; active_mask only sets is_done in saved records), so these defaults
+            # keep Arm A reward semantics identical.
             "turns_stats": 0,
             "valid_action_stats": 0,
+            "active_mask": True,
             "extra_info": {
                 "split": "train",
                 "index": r.get("problem_id", 0),
