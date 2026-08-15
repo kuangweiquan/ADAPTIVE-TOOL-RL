@@ -34,13 +34,21 @@ term_orphans() {
 }
 term_orphans "verl_tool.servers.tool_server"
 term_orphans "verl_tool.servers.serve"
+# batch SIGTERM all orphaned spawn workers, one wait, then sweep survivors
+# (a per-orphan sleep in the loop would serialize into many minutes of startup delay)
+ORPHAN_PIDS=""
 for p in $(pgrep -f "from multiprocessing.spawn import spawn_main"); do
     if [ "$(ps -o ppid= -p $p | tr -d ' ')" = "1" ]; then
-        kill $p 2>/dev/null
-        sleep 20
-        if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
+        ORPHAN_PIDS="$ORPHAN_PIDS $p"
     fi
 done
+if [ -n "$ORPHAN_PIDS" ]; then
+    kill $ORPHAN_PIDS 2>/dev/null
+    sleep 20
+    for p in $ORPHAN_PIDS; do
+        if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
+    done
+fi
 sleep 3
 
 # --- verify GPUs are actually free before launching (zombie driver allocations from
