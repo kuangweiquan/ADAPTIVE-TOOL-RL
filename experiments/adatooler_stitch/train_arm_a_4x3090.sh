@@ -12,6 +12,33 @@
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
+# --- pre-launch cleanup of orphaned processes from previously failed runs ---
+# When a verl_tool run dies abnormally, its vLLM engine cores (multiprocessing spawn
+# children) and per-replica tool servers survive and hold GPU memory; SIGKILLing them
+# on this platform (SeetaCloud, drv 570) can leave permanent driver-side zombie
+# allocations, so SIGTERM first and only SIGKILL survivors. Only orphans (PPID=1) are
+# touched; never matches the running script itself (its cmdline lacks these patterns).
+term_orphans() {
+    local pids
+    pids=$(pgrep -f "$1" 2>/dev/null)
+    [ -n "$pids" ] || return 0
+    kill $pids 2>/dev/null
+    sleep 8
+    for p in $pids; do
+        if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
+    done
+}
+term_orphans "verl_tool.servers.tool_server"
+term_orphans "verl_tool.servers.serve"
+for p in $(pgrep -f "from multiprocessing.spawn import spawn_main"); do
+    if [ "$(ps -o ppid= -p $p | tr -d ' ')" = "1" ]; then
+        kill $p 2>/dev/null
+        sleep 2
+        if kill -0 $p 2>/dev/null; then kill -9 $p 2>/dev/null; fi
+    fi
+done
+sleep 3
+
 train_data=/root/autodl-tmp/datasets/adatooler_v_subset/train.parquet
 val_data=/root/autodl-tmp/datasets/adatooler_v_subset/val.parquet
 model_name=/root/autodl-tmp/models/AdaTooler-V-SFT-model
