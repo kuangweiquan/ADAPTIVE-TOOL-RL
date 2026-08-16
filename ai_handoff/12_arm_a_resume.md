@@ -112,4 +112,6 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 - **再修正（同分块模式）**：vendored `logprobs_from_logits_v2` bf16 分支行循环改为序列维分块（chunk 4096，softmax/gather 逐 token 独立，数值完全一致）→ 瞬态 4.64G→1.16G，峰值 ≈20.9G 余量 ~2.6G。探针确认引擎侧无其他杠杆：mnbt 10k→4k 对引擎占用零影响（12.26 vs 12.30G，encoder cache 极小）；gmem 0.45 仅再省 ~1.2G 但会压 rollout KV cache
 - **第 22 次（行分块 4096 后）仍 OOM**：失败的 2.32 GiB 分配 = 4096-token bf16 块的 **fp32 内部暂存**（log_softmax 核内部 upcast，恰好 2× 块尺寸）——分块 4096 仍太大
 - **行分块 4096→2048**（瞬态 1.74G：bf16 输出 0.58G + fp32 暂存 1.16G），峰值 ≈21.5G 余量 ~2G
-- 第 23 次启动 2026-08-16 ~11:55（远端 pid 100672），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
+- **第 23 次（行分块 2048 后）仍 OOM，差 ~0.1-0.2G**：失败的 1.16 GiB = 2048 块的 fp32 暂存；in-use 22.54G（基座实测 ~17.3G，比 #21 的 15.1G 高 ~2G——批次内序列组成差异/分配器碎片，样本次数不足未定因）。未进 step 1，ckpt 空
+- **关机停训（用户主动）**：~12:10 SIGTERM 温和停，显存排空（4 MiB/卡），ckpt 0。下次会话（GPU 重开后）候选：`gmem 0.5→0.45`（省 ~1.2G，压 rollout KV cache）+ 可选 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`；探针脚本可先量化 gmem=0.45 引擎占用
+- 下次启动前 **vendored 两处补丁需确认仍在**（editable install 源，重启实例不丢；若重装 verl-tool 环境则需重打）：torch_functional.py 熵分块 + 行循环分块（2048），备份 torch_functional.py.bak
