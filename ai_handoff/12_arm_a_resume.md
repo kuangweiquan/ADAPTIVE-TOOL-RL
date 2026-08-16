@@ -17,7 +17,7 @@
 a) verl_tool 引擎架构未按 tp=2 分片（每 GPU worker 实为完整模型 16.1G + cache ~4G）
 b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方式）
 
-**探针先行**（~3 分钟，开 GPU 后第一步）：独立 vLLM 实例量真实显存，避免第 17 次盲启。
+**探针先行**（5 轮矩阵 ~10 分钟，开 GPU 后第一步）：独立 vLLM 实例量真实显存，避免第 17 次盲启。探针脚本已入库（`experiments/adatooler_stitch/probe_vllm_mem.py` + `probe_vllm_mem_matrix.sh`，参数逐一镜像 verl_tool launch_server），判定分支见第 3 节 Step 2。
 
 ## 3. 提示词（粘贴到新会话窗口）
 
@@ -25,37 +25,55 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 你是本地 AI（Windows 开发机，无 GPU）。按 CLAUDE.md 执行，经 ssh ATR 直连远端 GPU 机。
 继续执行 ai_handoff/12_arm_a_resume.md 的 Arm A 续战任务。11 号文档记录了此前 16 次启动的完整诊断（必读其 §3 回报）。
 
-【前置】让用户开 GPU。开机后 Step 0 核对：
-  1. ssh ATR 'nvidia-smi -L && nvidia-smi --query-gpu=memory.used --format=csv,noheader' —— 4 张 3090、显存干净（开机即重置，前次僵尸分配自动消失）
-  2. ssh ATR 'cd /root/code && git pull origin main'（先 source /etc/network_turbo）—— 同步最新代码
+【前置】请用户开 GPU。开机后 Step 0 核对（GPU 命令一律经 ssh ATR）：
+  1. ssh ATR 'nvidia-smi -L && nvidia-smi --query-gpu=memory.used --format=csv,noheader'
+     —— 4 张 3090、显存干净（开机即重置，前次僵尸分配自动消失）
+  2. ssh ATR 'source /etc/network_turbo && cd /root/code && git pull origin main'
+     —— 同步最新代码（含新增探针 probe_vllm_mem.py / probe_vllm_mem_matrix.sh）
 
-【Step 1 探针（~3 分钟，地面真相）】用 verl-tool env 写一个独立 vLLM 探针：
-  VLLM_LOGGING_LEVEL=INFO python -c "from vllm import LLM; llm = LLM(model='/root/autodl-tmp/models/AdaTooler-V-SFT-model', tensor_parallel_size=2, gpu_memory_utilization=0.5, max_model_len=16384, max_num_seqs=64, max_num_batched_tokens=10000, enforce_eager=True, trust_remote_code=True); import torch; print('loaded', torch.cuda.memory_reserved())"
-  同时 nvidia-smi 采样。记录每卡占用 + INFO 日志里 "Model weights take X GiB" 与 KV cache 分配数。
-  对照探针 2（tp=1, gmem=0.85）同样采样，对比两者差异。
+【Step 1 探针矩阵（~10 分钟，地面真相，已写进仓库）】远端分离运行：
+  ssh ATR 'nohup bash /root/code/experiments/adatooler_stitch/probe_vllm_mem_matrix.sh > /root/autodl-tmp/probe_driver.log 2>&1 < /dev/null &'
+  轮询 /root/autodl-tmp/probe_matrix.log 直至出现 "matrix done"。5 轮探针，每轮一个独立 vLLM 实例、跑完自然退出
+  （此平台只有进程自退才干净释放显存——严禁 kill 探针；矩阵脚本自带每轮前后显存干净护栏，报 FATAL 即停并回报）：
+    mirror_verl  tp=2 gmem=0.5（sleep/CAR/chunked/mns=256 全开）—— 与 verl_tool 引擎参数逐一镜像，本轮数 = 判定基准
+    sleep_off    tp=2 gmem=0.5 --no-sleep          —— 隔离 vLLM 0.11 sleep 模式显存池
+    mns64        tp=2 gmem=0.5 --max-num-seqs 64   —— KV cache 是否响应并发数
+    old_cfg      tp=1 gmem=0.85                    —— 校准锚：应与 08-15 实测 21.3-21.4G 吻合
+    gmem85       tp=2 gmem=0.85                    —— 预算旋钮是否活着（init OOM 也算有效数据，自退即干净）
+  每轮记录：nvidia-smi 每卡占用 + compute-apps 每 PID 占用 + INFO 日志 "Model weights take X GiB"/KV cache 行 + [probe] SUMMARY 行。
+  注意：sleep 模式开时 KV cache 可能走 CuMemAllocator 池，nvidia-smi 与 torch 计数会分歧——分歧本身即证据，以 nvidia-smi 为准。
 
-【Step 2 按探针结果分支】
-  分支 A（vLLM 遵守配置，tp=2 每卡 ≤13G）：直接 nohup 启动训练（脚本已含清理+护栏），进入 Step 3 监控协议。
-  分支 B（每卡仍 ~21G，确认 verl_tool 引擎不分片/不缩 cache）：
-    - 先查 verl_tool 的 vllm_async_server 引擎组装（launch_server 的 args → per-GPU worker 结构）
-    - 候选：给引擎传 engine_kwargs.vllm.max_num_seqs/max_model_len 压 cache；或研究 per-step 引擎重建
-    - 关键约束：训练前向 logits 分配 ~4.9G（16k×151936×bf16），引擎 + 训练峰值必须 < 23.5G
-    - 拿不准就把探针数据与 verl_tool 引擎组装代码片段写回报，勿盲目改参数
+【Step 2 按探针结果分支】判定以 mirror_verl 单卡占用为准：
+  分支 A（≤13G/卡，vLLM 遵守配置）：直接 nohup 启动训练（脚本已含清理+护栏），进 Step 3。
+  分支 B（仍 ~21G/卡）：用其余四轮定位，全部有现成落点（已核对远端 verl_tool 源码）：
+    B1 sleep_off ≤13G 而 mirror_verl ~21G → 元凶 = verl_tool 硬编码 enable_sleep_mode=True（vllm_async_server.py launch_server 的 args 字典）。
+       落点（纯配置注入，不改 vendored 代码）：训练脚本加 +actor_rollout_ref.rollout.engine_kwargs.vllm.enable_sleep_mode=False
+       —— engine_kwargs 在 launch_server 里合并于硬编码项之后（**engine_kwargs 末尾展开，False 只滤 None 不会被滤掉），且 RolloutConfig 已定义该字段；
+       async 模式下 server.sleep()/wake_up() 无分支、engine.sleep() 从不被调用，关掉 sleep 模式无副作用（已核对源码）；
+       若 Hydra 拒绝 + 前缀，去掉 + 再试（11 号 #2 已验证 + 前缀对空 dict 注入可行）
+    B2 mns64 明显收缩 → cache 按 mns×模型长定尺寸而非预算 → engine_kwargs.vllm.max_num_seqs=64（必要时 max_num_batched_tokens=4096）；
+       代价：并发 256→64，rollout 变慢，50 步冒烟可接受
+    B3 五轮全 ≤13G 但此前 verl 引擎 21.28G → 元凶在 verl_tool 侧（ExternalZeroMQDistributedExecutor 经 ray zmq worker load_model / layered_summon=True / 引擎-训练重叠）。
+       此时勿盲改：把探针 SUMMARY + arm_a_train.log 引擎 init 段（grep -a "parallel_config\|Engine\|GiB"）写进本文档 §4 回报，按回报方案走
+    B4 gmem85 与 mirror_verl 几乎相同 → 0.11 预算公式对 tp=2 失效 → 用 gmem 扫描找经验目标（注意 tp=2 权重 8G，gmem<0.34 时预算装不下权重 init 必败，勿试更小值）
+  关键约束不变：引擎 + 训练峰值必须 < 23.5G/卡（训练前向 logits 单次 4.9G = 16k×151936×bf16）。
+  每次只改一个旋钮；改参前先在本文档 §4 回报节写依据。
 
-【Step 3 训练启动与监控（分支 A 时）】
-  ssh ATR 'nohup bash /root/code/experiments/adatooler_stitch/train_arm_a_4x3090.sh > /root/autodl-tmp/arm_a_train.log 2>&1 < /dev/null &'
-  监控：grep -aE "OOM|CUDA out of memory|Error|Traceback|acc_of_this_batch|reward/|step:|KeyError|No available memory"（注意 grep -a，日志含控制字符）
-  前 10 步密集盯，显存基线：引擎(≤13G) + 训练峰值(≤9G) 应 < 23.5G/卡
+【Step 3 训练启动与监控（分支 A 或 B 参数定稿后）】
+  如需 B1/B2 注入：先改 train_arm_a_4x3090.sh → 本地 commit+push → 远端 git pull（先 source /etc/network_turbo）
+  启动：ssh ATR 'nohup bash /root/code/experiments/adatooler_stitch/train_arm_a_4x3090.sh > /root/autodl-tmp/arm_a_train.log 2>&1 < /dev/null &'
+  监控：grep -aE "OOM|CUDA out of memory|Error|Traceback|acc_of_this_batch|reward/|step:|KeyError|No available memory" /root/autodl-tmp/arm_a_train.log（注意 grep -a，日志含控制字符）
+  前 10 步密集盯 + nvidia-smi 采样：引擎 + 训练峰值应 < 23.5G/卡（预期引擎 ≤13G + 训练 ≤9G）
   停机硬门（同 08/11 文档）：step 10 acc 长期 0 或 tool_call 异常 → 停机回报；step 50 pg_loss 无下行 → 停机回报
-  每 10 步摘指标存档进本文档回报节。
+  每 10 步摘指标存档进本文档 §4 回报节。
 
 【Step 4 Step-50 硬判定】50 步后 SIGTERM 温和停（**勿 SIGKILL 引擎 worker**——本平台杀死引擎进程必泄漏僵尸显存；温和停机让进程自退），用 50 步 ckpt 跑官方 191 题 anchor_eval（experiments/adatooler_stitch/anchor_eval.py）：
   ckpt acc ≥ 81% → Arm A 阳性，可 resume 至 150
   ckpt acc 78±3 → 「纯 acc GRPO 在本基座无增益」，转入 Arm B（同 50 步预算）
 
-【红线】不改 reward 代码；改显存参数前写回报并征询；不释放实例；权重/日志不进 git；引擎进程只温和停不硬杀。
+【红线】不改 reward 代码；改显存参数前写回报并征询；不释放实例；权重/日志不进 git；引擎/探针进程只自然退出不硬杀。
 
-【Step 5 回报】结果写入 ai_handoff/12 回报节 + 更新 knowledge-base，push。
+【Step 5 回报】结果写入 ai_handoff/12 §4 回报节 + 更新 knowledge-base，push。
 ```
 
 ## 4. 远端回报（待新会话填写）
