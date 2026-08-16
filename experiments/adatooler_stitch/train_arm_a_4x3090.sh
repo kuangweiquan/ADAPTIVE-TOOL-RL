@@ -17,6 +17,12 @@
 #   fused FA2 attention patch (qwen2_vl_attn_forward), which needs real flash_attn kernels that
 #   this env deliberately lacks (flash_attn 0.0.0 stub, see 05_verl_env_precheck). False keeps the
 #   HF sdpa attention path (perf-only knob; masked padding tokens, same softmax for valid tokens).
+#   log_prob_micro_batch_size_per_gpu 8->2 (08-16 fix, user-approved): compute_log_prob OOM at
+#   step-0 old_log_prob — with remove_padding=False each seq is fully padded to 16k, 8 seqs =
+#   131k tokens in one forward -> MLP intermediate 4.62 GiB single alloc on top of 21.28G steady
+#   (engine 12.3G + FSDP fwd + activations) -> OOM. 2 seqs = 32k tokens -> intermediate ~1.2G,
+#   peak ~18.8G. Per-token log probs are independent of micro-batch size (padding masked
+#   identically in every split), zero reward impact.
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -97,7 +103,7 @@ kl_loss_type=low_var_kl
 lr=1e-6
 reward_manager=adatooler_v
 ppo_micro_batch_size_per_gpu=1
-log_prob_micro_batch_size_per_gpu=8
+log_prob_micro_batch_size_per_gpu=2
 tensor_model_parallel_size=2
 gpu_memory_utilization=0.5
 do_offload=True
