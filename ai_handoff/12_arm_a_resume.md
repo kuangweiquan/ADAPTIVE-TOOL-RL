@@ -100,8 +100,8 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 - 缺口：2.24G 空闲 vs 4.62G 需求 → 差 ~2.4G，仅一步之遥
 - `ppo_max_token_len_per_gpu=16384` 在本版本 verl 的 log_prob 路径未生效分块（131K tokens 一次过前向）
 
-### 4.3 修复与第 18 次启动（进行中）
+### 4.3 修复与重启（第 18、19 次）
 
-- **修复（用户已确认）**：`log_prob_micro_batch_size_per_gpu` 8→2（`a53b41d`）——micro-batch 131K→32K tokens，激活 ~5G→~1.3G，峰值 ≈18.8G < 23.57G。逐 token log prob 与分批无关（padding 掩码在任意切分下一致），reward 零影响
-- 启动时间 2026-08-16 ~09:52，训练脚本含此唯一改动
-- 监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
+- **第 18 次（8→2 后）**：8→2 生效（稳态 21.28→20.63G，崩溃点从 MLP 中间张量移到逐行 softmax），但仍 OOM。定位：padded 路径 `logprobs_from_logits_v2`（torch_functional.py:129）逐行 `F.log_softmax(row_logits)`，行 = 填充后的 16k 序列 → [16384, 151936]×bf16 = **4.64 GiB 瞬态分配**，叠 ~16G 基座（引擎 12.3G + FSDP 前向 + 激活）必爆；该瞬态由填充长度决定，micro-batch 大小无法解决
+- **修复 #2（用户已确认，`baf0763`）**：`use_dynamic_bsz` False→True（actor/rollout/ref 三处一并）+ `ppo_max_token_len_per_gpu` 16384→8192——打包前向无 padding、逐 token 行（softmax 瞬态趋零）、8k 块（logits 2.32G + entropy 临时 ~4.6G），峰值 ≈18.4G 余量 ~5G。逐 token log prob 与 per-seq attention 掩码不变，reward 零影响；log_prob 前向略慢（打包开销）
+- 第 19 次启动 2026-08-16 ~10:10（远端 pid 37000），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
