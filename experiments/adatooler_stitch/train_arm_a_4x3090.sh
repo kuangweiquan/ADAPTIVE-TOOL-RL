@@ -23,6 +23,13 @@
 #   (engine 12.3G + FSDP fwd + activations) -> OOM. 2 seqs = 32k tokens -> intermediate ~1.2G,
 #   peak ~18.8G. Per-token log probs are independent of micro-batch size (padding masked
 #   identically in every split), zero reward impact.
+#   use_dynamic_bsz False->True + ppo_max_token_len_per_gpu 16384->8192 (08-16 fix #2, user-approved):
+#   padded-path logprobs_from_logits_v2 loops rows = padded 16k sequences, each
+#   F.log_softmax row = [16384, 151936] x bf16 = 4.64 GiB transient alloc on ~16G base -> OOM
+#   regardless of micro-batch size. Packed forward has no padding: rows are single tokens,
+#   8192-token chunks -> logits 2.32G + entropy temps ~4.6G, peak ~18.4G. Per-token log probs
+#   identical (per-sequence attention masks preserved), zero reward impact; log_prob somewhat
+#   slower (packing overhead, released script comments fixed mode as "faster").
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -89,7 +96,7 @@ max_prompt_length=8192
 max_response_length=8192
 max_obs_length=8192
 max_action_length=4096
-ppo_max_token_len_per_gpu=$(expr $max_prompt_length + $max_response_length)
+ppo_max_token_len_per_gpu=8192
 temperature=1.0
 top_p=1.0
 enable_agent=True
@@ -107,7 +114,7 @@ log_prob_micro_batch_size_per_gpu=2
 tensor_model_parallel_size=2
 gpu_memory_utilization=0.5
 do_offload=True
-use_dynamic_bsz=False
+use_dynamic_bsz=True
 ulysses_sequence_parallel_size=1
 fsdp_size=-1
 additional_eos_token_ids=[151645]
