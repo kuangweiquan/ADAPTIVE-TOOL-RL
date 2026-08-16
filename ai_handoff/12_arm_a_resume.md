@@ -110,4 +110,6 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 - **修正（分块熵替代关熵，同记忆目标更优）**：还原 fsdp_workers.py:978，改 vendored `entropy_from_logits`（torch_functional.py:145）为 token 维分块（chunk 2048，逐 token 数值完全一致）：熵临时 9.28G→1.16G，峰值 ≈20.7G（log_probs 逐行 softmax 时）不变。备份 `/root/autodl-tmp/torch_functional.py.bak`
 - **第 21 次（分块熵后）仍 OOM，差 0.9G**：micro-1+分块熵已生效（in-use 21.28→19.78G），但逐行 log_softmax 整行输出 [16384,151936]=4.64G 仍放不下（free 3.74G）
 - **再修正（同分块模式）**：vendored `logprobs_from_logits_v2` bf16 分支行循环改为序列维分块（chunk 4096，softmax/gather 逐 token 独立，数值完全一致）→ 瞬态 4.64G→1.16G，峰值 ≈20.9G 余量 ~2.6G。探针确认引擎侧无其他杠杆：mnbt 10k→4k 对引擎占用零影响（12.26 vs 12.30G，encoder cache 极小）；gmem 0.45 仅再省 ~1.2G 但会压 rollout KV cache
-- 第 22 次启动 2026-08-16 ~11:30（远端 pid 84805），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
+- **第 22 次（行分块 4096 后）仍 OOM**：失败的 2.32 GiB 分配 = 4096-token bf16 块的 **fp32 内部暂存**（log_softmax 核内部 upcast，恰好 2× 块尺寸）——分块 4096 仍太大
+- **行分块 4096→2048**（瞬态 1.74G：bf16 输出 0.58G + fp32 暂存 1.16G），峰值 ≈21.5G 余量 ~2G
+- 第 23 次启动 2026-08-16 ~11:55（远端 pid 100672），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
