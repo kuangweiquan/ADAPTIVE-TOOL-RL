@@ -91,13 +91,17 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 判定表（§3 Step 2）：**分支 A 成立**——mirror_verl 12.30G ≤ 13G，vLLM 0.11 完全遵守 tp=2+gmem=0.5（8G 分片权重 + 1.96G KV + 开销 ≈ 12.3G）。B1/B2 排除：sleep 开关与 mns 均不影响 cache 池尺寸（1.96 GiB 三轮一致）。gmem85 init OOM 佐证预算公式活着（0.85 → cache 10.21G/卡 + 权重 8G + 初始化峰值 > 23.57G 可用 → 死亡）。
 （工具注：首轮矩阵探针 SUMMARY 解析行有 nounits bug、5 轮均 exit=1，测量数据不受影响，已修并 push `88ae94b`。）
 
-### 4.2 对 11 号「21.28G/卡」之谜的解释（结论）
+### 4.2 第 17 次启动 OOM 定位（21.28G 之谜的最终答案）
 
-干净卡上引擎实测 12.3G；加 verl 侧开销 ~2.3G（校准：old_cfg plain 19.09G vs 11 号 verl 实测 21.3-21.4G，差值 2.3G）≈ 真实 **14.6G/卡**。11 号实测 21.28G ≈ 14.6G 真实 + ~6.7G 驱动僵尸记账（关机前 4 卡被僵尸堵满 21830 MiB/卡——同源）。即 21.28G 是**僵尸污染的假数**，tp=2+gmem=0.5 配置本身是对的。开机重置僵尸后，第 17 次启动在干净卡上进行。
+第 17 次（09:39，脚本原样）在 step 0 的 `compute_log_prob`（old_log_prob）复现 OOM，traceback 给出精确答案：
 
-### 4.3 训练状态（进行中，2026-08-16 09:39 启动，远端 pid 5961）
+- 失败的 4.62 GiB 分配 = **MLP 中间张量**（`down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))`），非此前推论的 logits 张量。131,072 tokens = 8 seq × 16k（`use_remove_padding=False` 全 pad）× 18944 中间维 × bf16 ≈ 4.62G，一次分配
+- **每个 FSDP worker 进程稳态 21.28 GiB 在用**（4 进程一致，OOM 消息原文 "Process 16246 has 21.28 GiB memory in use"）= 引擎 12.3G（探针实测）+ FSDP 前向参数 ~4G + 梯度检查点激活 ~5G。11 号「4×21784 MiB」是**真实数字**（引擎+训练共存），§4.1 时代的僵尸污染解释撤回（僵尸问题仍真实存在，但不是 21.28G 的来源）
+- 缺口：2.24G 空闲 vs 4.62G 需求 → 差 ~2.4G，仅一步之遥
+- `ppo_max_token_len_per_gpu=16384` 在本版本 verl 的 log_prob 路径未生效分块（131K tokens 一次过前向）
 
-- 分支 A 不改参数，train_arm_a_4x3090.sh 原样启动
-- 剩余风险：compute_log_prob 训练前向峰值（11 号 OOM 点）。引擎侧已确认 12.3G，训练侧预算 ≈ 23.57−12.3 = 11.3G（FSDP ~4G + 激活 + logits 4.9G）——逼近上限
-- 若再现 OOM，候选杠杆（回报并征询用户后再动，一次一个）：`log_prob_micro_batch_size_per_gpu` 8→2；`ppo_max_token_len_per_gpu` 16384→8192（logits 张量 4.9G→2.45G）
+### 4.3 修复与第 18 次启动（进行中）
+
+- **修复（用户已确认）**：`log_prob_micro_batch_size_per_gpu` 8→2（`a53b41d`）——micro-batch 131K→32K tokens，激活 ~5G→~1.3G，峰值 ≈18.8G < 23.57G。逐 token log prob 与分批无关（padding 掩码在任意切分下一致），reward 零影响
+- 启动时间 2026-08-16 ~09:52，训练脚本含此唯一改动
 - 监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
