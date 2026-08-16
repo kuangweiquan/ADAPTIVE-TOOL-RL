@@ -29,9 +29,10 @@ import subprocess
 import sys
 
 
-def nvidia_smi(query):
+def nvidia_smi(query, nounits=False):
+    fmt = "--format=csv,noheader,nounits" if nounits else "--format=csv,noheader"
     return subprocess.run(
-        ["nvidia-smi", query, "--format=csv,noheader"],
+        ["nvidia-smi", query, fmt],
         capture_output=True, text=True,
     ).stdout.strip()
 
@@ -109,7 +110,7 @@ def main():
         print("[probe] cache_config:", getattr(vllm_config, "cache_config", None), flush=True)
 
     smi_used = {}
-    for row in nvidia_smi("--query-gpu=index,memory.used").splitlines():
+    for row in nvidia_smi("--query-gpu=index,memory.used", nounits=True).splitlines():
         idx, used = [c.strip() for c in row.split(",")]
         smi_used[int(idx)] = int(used)
     cells = [f"gpu{i}:smi_used={smi_used.get(i, '?')}MiB" for i in range(torch.cuda.device_count())]
