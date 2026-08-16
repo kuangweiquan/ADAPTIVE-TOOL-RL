@@ -106,4 +106,6 @@ b) vLLM 0.11 的 cache 预算逻辑与预期不同（0.5 应用位置/分片方�
 - **修复 #2（用户已确认，`baf0763`）**：`use_dynamic_bsz` False→True（actor/rollout/ref 三处一并）+ `ppo_max_token_len_per_gpu` 16384→8192——打包前向无 padding、逐 token 行（softmax 瞬态趋零）、8k 块（logits 2.32G + entropy 临时 ~4.6G），峰值 ≈18.4G 余量 ~5G。逐 token log prob 与 per-seq attention 掩码不变，reward 零影响；log_prob 前向略慢（打包开销）
 - **第 19 次（打包路径）失败**：verl `seqlen_balancing.py:295` 硬断言 `max_token_len >= max_seq_len`（8192 < 16384）——本版本动态打包不支持切分长序列，8k 块方案毙掉；块=16384 时 logits 4.64G + entropy 临时 9.28G 又超预算
 - **修复 #2 定稿（用户已确认，`07566c5` + vendored 一行）**：回到 padded 路径（`use_dynamic_bsz=False`、`ppo_max_token_len_per_gpu` 还原 16384）+ `log_prob_micro_batch_size_per_gpu` 1（logits [1,16k,151936]=4.64G + 逐行 softmax 4.64G，峰值 ≈20.7G）+ vendored 一行 `calculate_entropy=True→False`（fsdp_workers.py:978；entropy_coeff=0 下只丢一条日志指标，reward 零影响；备份 `/root/autodl-tmp/fsdp_workers.py.bak_entropy`）
-- 第 20 次启动 2026-08-16 ~10:45（远端 pid 52594），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
+- **第 20 次失败（关熵方案毙掉）**：entropys=None 流入 `DataProto.from_dict` → AttributeError（ray_trainer:1176 每步无条件读 `batch["entropys"]` 算 actor/entropy 指标，无 entropy_coeff 守卫）→ 关熵需要改两处 vendored 且丢指标
+- **修正（分块熵替代关熵，同记忆目标更优）**：还原 fsdp_workers.py:978，改 vendored `entropy_from_logits`（torch_functional.py:145）为 token 维分块（chunk 2048，逐 token 数值完全一致）：熵临时 9.28G→1.16G，峰值 ≈20.7G（log_probs 逐行 softmax 时）不变。备份 `/root/autodl-tmp/torch_functional.py.bak`
+- 第 21 次启动 2026-08-16 ~11:05（远端 pid 68371），监控硬门同 §3 Step 3/4；后续指标逐 10 步续填本节
