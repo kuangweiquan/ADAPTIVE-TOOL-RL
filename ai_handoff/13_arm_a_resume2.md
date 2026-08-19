@@ -61,6 +61,52 @@
 【Step 5 回报】结果写入 ai_handoff/13 §4 回报节 + 更新 knowledge-base，push。
 ```
 
-## 4. 远端回报（待新会话填写）
+## 4. 远端回报（2026-08-19 填写：探针 gmem45 + #24-#27 四次启动全链 + #28 预备）
 
-（空：探针 gmem45 结果 / 参数改动 / 训练指标 / 50 步判定结论）
+### 4.1 探针 gmem45（Step 1，一次性通过）
+
+| 配置 | 引擎占用/卡 | KV cache |
+|---|---|---|
+| gmem=0.5（基线） | 12.30 GiB | 73,408 tok |
+| **gmem=0.45** | **11.16 GiB** | **29,280 tok** |
+
+省 1.14G，KV 29,280 ≥ 2 万达标。探针自退干净（exit 0）。用户确认后脚本 gmem 0.5→0.45（`a886812`）。
+
+### 4.2 第 24 次（gmem 0.45 单旋钮）：死亡点首次推进到 update 阶段
+
+- **old_log_prob（compute_log_prob）首次通过**——#17-#23 的死点被 gmem 0.45 攻克
+- 死于下一阶段 `actor_rollout_update_actor`（update）：同 1.16 GiB 分配（2048 块 fp32 暂存），in-use 22.54G、free 1005 MiB，差 ~160 MiB（free+reserved-unalloc 1201 MiB vs 需求 1188）
+- update 阶段基座比 log_prob 阶段高（梯度+optimizer+激活），吃掉了 gmem 省下的 1.14G
+- 显存自净（4 MiB/卡），无僵尸
+
+### 4.3 第 25 次（+expandable_segments）：被 vLLM 0.11 硬断言击杀
+
+- 用户确认双旋钮（chunk 1024 + expandable_segments，`cae7041`）；vendored 行分块 2048→1024 打上（备份 `.bak_2048`，三处切片 loop/logits/labels 对齐）
+- **expandable_segments 与 vLLM 0.11 内存池硬冲突**：引擎核 init 即崩 `AssertionError: Expandable segments are not compatible with memory pool`（vLLM 源码 `cumem.py:150` 设计性硬断言，torch 已知问题 #147851；LLM() 无 envs 覆盖参数）。引擎进程继承脚本 env，无法从脚本层隔离
+- **回退**（`1cac6a4`，脚本留「勿再加回」警示注释）
+
+### 4.4 第 26 次（chunk 1024 单旋钮）：差 3 MiB 照片级惜败
+
+- 分块生效：失败分配 1.16G→**594 MiB**；但 in-use 23.14G（比 #24 的 22.54G 高 0.6G——**基座方差**把收益吃光）
+- free 395 + reserved-unalloc 202 = 597 MiB vs 需求 594 → **差 3 MiB**
+
+### 4.5 第 27 次（mns 256→64，`bc0add8`）：锁定真元凶
+
+- 引擎装载实测 10.4G（省 0.75G ✓），但 update 基座仍 **23.08-23.14G，与 #26 一字不差**
+- 结论：**引擎 rollout 后 workspace 膨胀 ~0.75G 吃掉了 mns 收益**——sleep 模式下 CuMem 池留存 rollout 工作区，`free_cache_engine` 只还 KV 块不还 workspace，训练侧也用不到池内存
+- 失败：594 MiB 分配、free 391-451 MiB
+
+### 4.6 #28 预备（已全部落地，未启动——用户关机）
+
+- **杠杆 (a) `+actor_rollout_ref.rollout.engine_kwargs.vllm.enable_sleep_mode=False`**（`b9a74fc`）：注入路径已实锤——vllm_async_server.py:229 硬编码 True、:237 `**engine_kwargs` 在其后展开、:202 只滤 None；RolloutConfig.engine_kwargs 字段存在（rollout.py:144）；async 模式从不调用 sleep()/wake_up()（12 号已核），零副作用。预期：rollout 后 workspace+KV 归还驱动，update 基座 ~20-21G
+- **杠杆 (b) vendored 行分块 1024→512**：fp32 暂存 594→297 MiB（备份 `.bak_1024`，三处切片已对齐并核验）
+- 双杠杆独立（引擎侧 vs 训练侧瞬态），任一单独生效都可能过，双开几乎必过
+- **远端已就位**：脚本 b9a74fc、chunk 512 补丁、备份链 .bak/.bak_2048/.bak_1024；GitHub main = b9a74fc
+- 下次会话按 14 号文档执行：开 GPU → Step 0 核对 → 第 28 次启动
+
+### 4.7 关键教训（供 14 号/后续参考）
+
+1. **每 3 分钟采样会漏掉峰值**：本会话 OOM 均靠日志监控即时捕获；下一步的 #28 建议在 update 窗口加 10-20s 间隔的 per-PID 采样（nvidia-smi --query-compute-apps）分解「引擎 vs 训练侧」占用，验证 sleep-off 假说
+2. **照片级缺口史**：#24 差 13 MiB（free+unalloc 1201 vs 1188）、#26 差 3 MiB（597 vs 594）——分块收益每次都被基座方差（0.6-2G）吃掉；基座方差与固定 shape 并存，指向分配器状态/碎片，scoped-expandable（训练 worker 导入序注入 env）仍是后备手术
+3. **备用杠杆未动**：chunk 512 已是最小有效分块（再往下 256 收益趋零）；`data.max_prompt/response_length` 8192→4096 可砍 logits 张量 4.64→2.32G 但会截断长轨迹、reward 影响非零，需用户单独确认才可试
+4. **scp 直传脚本安全**：本会话多次 scp 直传（push 故障兜底），远端 0 CR 字节验证通过；`tr -cd "\r" < file | wc -c` 是可靠检测法（引号转义会骗过 grep -cP）
