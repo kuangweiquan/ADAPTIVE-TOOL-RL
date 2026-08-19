@@ -33,6 +33,12 @@
 #   NOTE: use_dynamic_bsz=True (packed) was rejected by verl's seqlen_balancing assert
 #   (max_token_len >= max_seq_len; 8192 < 16384) and 16k chunks + entropy still OOM.
 #   ppo_max_token_len_per_gpu is ignored by the padded path (kept at prompt+response).
+#   08-19 fix #4 (user-confirmed): #24 died in the update phase, 160MiB short, after
+#   old_log_prob finally passed with gmem 0.45 (death point moved past #17-#23's). Two
+#   knobs together: (a) PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True export below to
+#   reclaim allocator fragmentation (torch OOM message recommendation); (b) vendored
+#   torch_functional.py row-chunk 2048->1024 (fp32 log_softmax temp 1.16G->0.58G, backup
+#   torch_functional.py.bak_2048 on remote). Both zero reward impact.
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -131,6 +137,13 @@ export NCCL_DEBUG=INFO
 export VLLM_USE_V1=1
 export HF_HUB_DISABLE_XET=1
 export CUDA_VISIBLE_DEVICES=0,1,2,3
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+#   ^ 08-19 fix #4a (user-confirmed, with vendored row-chunk 2048->1024): #24 passed
+#   old_log_prob (gmem 0.45 worked) but died in actor_rollout_update_actor, 160MiB short on
+#   the same 1.16G chunk temp (in-use 22.54G, free ~1G). torch OOM messages repeatedly
+#   recommend expandable_segments to reclaim reserved-but-unallocated fragmentation
+#   (~196MiB measured). Inherited by trainer + ray workers; vLLM engine KV cache uses its
+#   own CuMemAllocator and is unaffected.
 rollout_mode='async'
 
 action_stop_tokens_file="/root/autodl-tmp/arm_a_action_stop_tokens"
