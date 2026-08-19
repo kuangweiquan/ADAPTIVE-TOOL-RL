@@ -44,6 +44,16 @@
 #   died 3MiB short in update phase with base 23.14G -> mns64 lands base ~22.2G, ~0.8G
 #   margin at chunk 1024. KV cache (29,280 tok) already caps concurrency (~14 seqs of 2k)
 #   so mns=64 costs little rollout speed. Zero reward impact.
+#   08-19 fix #6 (user-confirmed, #28): #27 showed the mns64 engine saving (10.4G at load)
+#   fully absorbed by post-rollout workspace retention -> update base unchanged at 23.1G.
+#   Two knobs together: (a) engine_kwargs.vllm.enable_sleep_mode=False below - verl_tool
+#   hardcodes sleep mode True (vllm_async_server.py:229); engine_kwargs merges after it
+#   (line 237) and only None is filtered (line 202), so False lands. Async mode never
+#   calls sleep()/wake_up() (verified 12号), zero side effect; with sleep OFF the engine
+#   returns post-rollout workspace + KV cache to the driver on free_cache_engine, expected
+#   update base ~20-21G. (b) vendored row-chunk 1024->512 (fp32 softmax temp 594->297 MiB,
+#   backup torch_functional.py.bak_1024). If sleep-off alone lands base ~20G this is
+#   over-margin; if it does nothing, chunk 512 alone gives ~100-150MiB vs worst observed.
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -224,6 +234,7 @@ PYTHONUNBUFFERED=1 python -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.rollout.mode=$rollout_mode \
     actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
     actor_rollout_ref.rollout.layered_summon=True \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.enable_sleep_mode=False \
     actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=$use_dynamic_bsz \
