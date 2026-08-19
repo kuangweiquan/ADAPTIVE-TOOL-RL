@@ -38,7 +38,12 @@
 #   vendored torch_functional.py row-chunk 2048->1024 (fp32 log_softmax temp 1.16G->0.58G,
 #   backup torch_functional.py.bak_2048 on remote). Zero reward impact. The companion knob
 #   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True was tried and REVERTED (#25): vLLM
-#   0.11 engine cores assert-incompatible (pytorch#147851), see export block below.
+#   0.11 engine cores assert-incompatible (cumem.py:150 hard assert), see export block below.
+#   08-19 fix #5 (user-confirmed): max_num_seqs 256->64 - probe matrix (12号 §4.1) measured
+#   mns64 engine at 11.33G vs 12.30G at mns256 (-0.97G scheduler/workspace buffers); #26
+#   died 3MiB short in update phase with base 23.14G -> mns64 lands base ~22.2G, ~0.8G
+#   margin at chunk 1024. KV cache (29,280 tok) already caps concurrency (~14 seqs of 2k)
+#   so mns=64 costs little rollout speed. Zero reward impact.
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -215,7 +220,7 @@ PYTHONUNBUFFERED=1 python -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.n=$n \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=$use_dynamic_bsz \
-    actor_rollout_ref.rollout.max_num_seqs=256 \
+    actor_rollout_ref.rollout.max_num_seqs=64 \
     actor_rollout_ref.rollout.mode=$rollout_mode \
     actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
     actor_rollout_ref.rollout.layered_summon=True \
