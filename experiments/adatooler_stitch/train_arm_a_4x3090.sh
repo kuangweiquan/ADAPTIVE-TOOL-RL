@@ -1,18 +1,19 @@
 #!/bin/bash
 # Arm A (plain acc GRPO, released-code fidelity) downscaled 8x80G -> 4x3090 24G.
 # Mirror of verltool/examples/train/adatooler_v/train_qwen25vl.sh with plan-10 changes:
-#   n_gpus 8->4, tensor_parallel 2 (released value, see note below), gpu_mem_util 0.8->0.5,
+#   n_gpus 8->4, tensor_parallel 2 (released value, see note below), gpu_mem_util 0.8->0.5->0.45,
 #   batch 64->32, n 8->4,
 #   prompt/response/obs 16384->8192, save_freq 50->10, total_steps 150, logger console-only,
 #   local model/data paths, val_batch 512->100.
 #   + model.override_config.attn_implementation=sdpa: verl defaults to flash_attention_2 but this
 #   env ships a deliberate flash_attn stub (ver 0.0.0, see 05_verl_env_precheck) -> HF >=2.1.0 gate
 #   raises ImportError at AutoConfig time; sdpa keeps the qwen3_vl torch-backend path (no FA2 kernels).
-#   tp=2 + gpu_mem_util 0.5 (08-15 fix, user-confirmed): the async rollout engine stays resident
-#   during the training phase (vLLM 0.11 sleep mode is a no-op on this setup), so engine+traning
-#   forward must fit together: tp=2 shards weights to ~8G/card, 0.5 budget=12G leaves ~2.8G KV
-#   cache; training peak (logits ~4.9G @16k tokens) then fits in the remaining ~11G. tp=1 would
-#   need 16.1G weights alone -> OOM (0.85 tried, still OOM at compute_log_prob).
+#   tp=2 + gpu_mem_util 0.45 (08-16 fix #3, user-confirmed, probe gmem45): the async rollout
+#   engine stays resident during the training phase (vLLM 0.11 sleep mode is a no-op on this
+#   setup), so engine+training forward must fit together: tp=2 shards weights to ~8G/card,
+#   0.45 budget=11.16G (probe-measured, vs 12.30G at 0.5) leaves ~1.2G KV cache (29,280 tok,
+#   vs 73,408 at 0.5); #23 OOM was 0.1-0.2G over -> this 1.14G saving lands peak ~21.4G,
+#   inside the <=21.5G target. tp=1 would need 16.1G weights alone -> OOM (0.85 tried).
 #   use_remove_padding True->False (08-15 fix): remove_padding=True makes verl install its
 #   fused FA2 attention patch (qwen2_vl_attn_forward), which needs real flash_attn kernels that
 #   this env deliberately lacks (flash_attn 0.0.0 stub, see 05_verl_env_precheck). False keeps the
@@ -114,7 +115,7 @@ reward_manager=adatooler_v
 ppo_micro_batch_size_per_gpu=1
 log_prob_micro_batch_size_per_gpu=1
 tensor_model_parallel_size=2
-gpu_memory_utilization=0.5
+gpu_memory_utilization=0.45
 do_offload=True
 use_dynamic_bsz=False
 ulysses_sequence_parallel_size=1
