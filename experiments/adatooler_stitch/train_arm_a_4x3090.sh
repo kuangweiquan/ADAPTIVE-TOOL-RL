@@ -117,7 +117,18 @@ n=4
 batch_size=32
 ppo_mini_batch_size=32
 max_prompt_length=8192
-max_response_length=8192
+# 08-20 fix #7 (user-confirmed, #30): #29 died in update_actor allocating the full
+# padded logits [1,16384,151936] bf16 = 4.64GiB (lm_head output, backward-required,
+# cannot be chunked like logprobs/entropy) - in-use 19.23G + 4.64G = 23.87G vs 23.57G
+# hard cap, ~330MiB short. ppo_max_token_len_per_gpu is IGNORED on the padded path
+# (use_dynamic_bsz=False splits by ppo_micro_batch_size_per_gpu=1, each micro keeps
+# the full [1,16384]; use_dynamic_bsz=True rejected by seqlen_balancing assert
+# max_token_len>=max_seq_len) - verified in dp_actor.py:394-402. Only remaining
+# config knob = data length. max_response_length 8192->4096 (prompt untouched, images
+# live in prompt side): padded 16384->12288, logits 4.64->3.48G, peak ~23.0G.
+# Truncation impact measured ~0: #29 rollout records n=64 full trajectories
+# median 3471 / max 4027 chars, tool turns <=1, final answers short.
+max_response_length=4096
 max_obs_length=8192
 max_action_length=4096
 ppo_max_token_len_per_gpu=$(expr $max_prompt_length + $max_response_length)
