@@ -54,6 +54,24 @@
 #   update base ~20-21G. (b) vendored row-chunk 1024->512 (fp32 softmax temp 594->297 MiB,
 #   backup torch_functional.py.bak_1024). If sleep-off alone lands base ~20G this is
 #   over-margin; if it does nothing, chunk 512 alone gives ~100-150MiB vs worst observed.
+#   08-20 fix #7 (user-confirmed, #30): #29 died in update allocating the padded logits
+#   [1,16384,151936] bf16 = 4.64G (lm_head, backward-required) - in-use 19.23G + 4.64G
+#   vs 23.57G cap, ~330MiB short. max_response_length 8192->4096 (prompt untouched, images
+#   live in prompt): padded 16384->12288, logits 4.64->3.48G. Truncation measured ~0
+#   (#29 rollout n=64: generated portion median 232 / max 743 chars, tool turns <=1).
+#   ppo_max_token_len_per_gpu is IGNORED on the padded path (use_dynamic_bsz=False splits
+#   by ppo_micro_batch_size_per_gpu=1; dynamic bsz rejected by seqlen_balancing assert) -
+#   verified in dp_actor.py:394-402, kept for documentation.
+#   08-20 fix #8 (user-confirmed, #32): #30/#31 died ~100-250MiB short in update with
+#   IDENTICAL base 23.50G (variance absent; fragmentation: reserved-unallocated 238MiB
+#   has no >=150MiB contiguous block). Root cause: normal backend materializes logits AND
+#   dlogits [1,12288,151936] (forward 3.48G + backward 3.48G) - no seq-shortening can fix
+#   the backward half. FIX: verl official fused kernels - FusedLinearForPPOFunction
+#   (pure torch autograd.Function, no triton/compile): forward computes log_probs chunk-
+#   wise never materializing logits (saves hidden+vocab only), backward recomputes per
+#   chunk never materializing dlogits. Patch via monkey_patch.patch_forward_with_backends
+#   (qwen3_vl supported; impl_backend=torch). Zero data/reward impact (fp32 softmax same
+#   math; old/new log_probs share the fused path). Expected update peak ~18G, ~5G margin.
 set -x
 export PATH=/root/autodl-tmp/envs/verl-tool/bin:$PATH
 
@@ -202,6 +220,8 @@ PYTHONUNBUFFERED=1 python -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.trust_remote_code=True \
+    actor_rollout_ref.model.use_fused_kernels=True \
+    actor_rollout_ref.model.fused_kernel_options.impl_backend=torch \
     actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model'] \
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu \
